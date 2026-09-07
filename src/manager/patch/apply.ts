@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { buildFlatAsar } from './asarBuild.js'
+import type { WriteFileSync } from '../../shared/fsLike.js'
 import { classifyAppAsar, type AppAsarKind, type FsLike } from './asarInspect.js'
 import { renderShimSource, SHIM_PACKAGE_JSON } from './shimSource.js'
 
@@ -19,7 +20,7 @@ import { renderShimSource, SHIM_PACKAGE_JSON } from './shimSource.js'
 export interface PatchFs extends FsLike {
   copyFileSync(src: string, dest: string): void
   renameSync(src: string, dest: string): void
-  writeFileSync(p: string, data: Buffer): void
+  writeFileSync: WriteFileSync
   unlinkSync(p: string): void
 }
 

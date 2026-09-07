@@ -8,7 +8,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "manager": "npm run build && electron dist-manager/main.js"
   },
   "devDependencies": {
     "@electron/asar": "^4.3.0",

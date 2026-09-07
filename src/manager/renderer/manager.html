@@ -1,0 +1,63 @@
+<meta charset="utf-8" />
+<title>VoiceCord マネージャ</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    padding: 20px;
+    background: #1e1f22;
+    color: #dbdee1;
+    font: 14px/1.6 system-ui, sans-serif;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .sub { color: #949ba4; font-size: 13px; margin: 0 0 16px; }
+  .row {
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    background: #2b2d31;
+  }
+  .head { display: flex; align-items: center; gap: 10px; }
+  .name { font-weight: 600; }
+  .ver { color: #949ba4; font-size: 13px; }
+  .spacer { flex: 1; }
+  .badge {
+    font-size: 12px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .b-clean    { background: rgba(148,155,164,.15); color: #b5bac1; }
+  .b-voicecord{ background: rgba(59,165,93,.15);  color: #3ba55d; border-color: rgba(59,165,93,.4); }
+  .b-otherMod { background: rgba(232,163,61,.15); color: #e8a33d; }
+  .b-broken   { background: rgba(237,66,69,.15);  color: #ed4245; border-color: rgba(237,66,69,.4); }
+  .detail { color: #949ba4; font-size: 12px; margin-top: 6px; word-break: break-all; }
+  .warn {
+    margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 13px;
+    background: rgba(237,66,69,.12); border: 1px solid rgba(237,66,69,.35);
+  }
+  .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  button {
+    font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.12); background: #3a3c42; color: #dbdee1;
+  }
+  button:hover:not(:disabled) { background: #45474e; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: #5865f2; border-color: #5865f2; color: #fff; }
+  button.danger  { background: #3a3c42; border-color: rgba(237,66,69,.5); color: #f5a1a3; }
+  .foot { margin-top: 18px; display: flex; gap: 8px; align-items: center; }
+  #msg { margin-top: 12px; font-size: 13px; white-space: pre-wrap; }
+  #msg.ok  { color: #3ba55d; }
+  #msg.ng  { color: #ed4245; }
+  .chain { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 13px; }
+  .chain input { flex: 1; font: inherit; padding: 4px 8px; border-radius: 6px;
+    border: 1px solid rgba(255,255,255,.12); background: #1e1f22; color: #dbdee1; }
+</style>
+<h1>VoiceCord マネージャ</h1>
+<p class="sub">Discord の app.asar を差し替えて VoiceCord を組み込みます。適用の前に Discord を終了してください。</p>
+<div id="list">読み込み中…</div>
+<div id="msg"></div>
+<div class="foot">
+  <button id="reload">再走査</button>
+  <button id="restore">復旧手順</button>
+</div>
+<script src="./manager.js"></script>

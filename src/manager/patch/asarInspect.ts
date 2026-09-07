@@ -1,3 +1,4 @@
+import type { FsRead } from '../../shared/fsLike.js'
 import { parseShimChain, SHIM_MARKER } from './shimSource.js'
 
 const BACKSLASH = String.fromCharCode(92)
@@ -7,10 +8,8 @@ const BACKSLASH = String.fromCharCode(92)
  * Electron の中から app.asar を読むと asar 展開に横取りされてしまう。
  * ここでは呼び出し側から fs を注入させ、Electron 側では original-fs を渡す。
  */
-export interface FsLike {
-  existsSync(p: string): boolean
+export interface FsLike extends FsRead {
   statSync(p: string): { size: number }
-  readFileSync(p: string): Buffer
 }
 
 export interface AsarHeader {

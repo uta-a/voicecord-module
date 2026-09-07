@@ -1,0 +1,209 @@
+import { applyPatch, planPatch, targetFor, unpatch, type PatchFs, type UnpatchMode } from './patch/apply.js'
+import { isRunning, type ProcessLister } from './patch/running.js'
+import {
+  installState,
+  isVoiceCordActive,
+  scanInstalls,
+  type DiscordInstall,
+  type ScanFs
+} from './patch/scan.js'
+import type { VoiceCordPaths } from '../shared/paths.js'
+import { needsReapply } from '../shared/state.js'
+import { getInstall, readState, removeInstall, upsertInstall, writeState, type StateFs } from '../shared/stateStore.js'
+
+/**
+ * マネージャの操作をひとまとめにした層。Electron に依存しないのでテストできる。
+ *
+ * ここでは Discord を強制終了しない。起動中なら適用を断って理由を返す。
+ */
+
+export interface ServiceFs extends PatchFs, ScanFs, StateFs {
+  readdirSync(p: string): string[]
+  statSync(p: string): { size: number; isDirectory?: () => boolean }
+  copyFileSync(src: string, dest: string): void
+  mkdirSync(p: string, opts: { recursive: true }): void
+}
+
+export interface ServiceDeps {
+  fs: ServiceFs
+  paths: VoiceCordPaths
+  /** ビルド成果物の置き場（開発中は <repo>/payload、配布時は resources/payload） */
+  payloadDir: string
+  localAppData: string
+  join: (...p: string[]) => string
+  dirname: (p: string) => string
+  listProcesses: ProcessLister
+  now: () => string
+}
+
+export interface InstallRow {
+  branch: string
+  label: string
+  version: string
+  resourcesDir: string
+  /** clean / voicecord / otherMod / broken */
+  state: string
+  detail: string
+  /** VoiceCord が連鎖に入っているか */
+  active: boolean
+  /** Discord が更新されて再適用が要るか */
+  staleVersion: boolean
+  running: boolean
+  /** patcher が Discord の中で最後に動いた日時 */
+  lastPatcherRunAt: string | null
+}
+
+export function listInstalls(deps: ServiceDeps): InstallRow[] {
+  const state = readState(deps.fs, deps.paths.state)
+  return scanInstalls(deps.fs, { localAppData: deps.localAppData, join: deps.join }).map((i) =>
+    toRow(deps, i, state)
+  )
+}
+
+function toRow(
+  deps: ServiceDeps,
+  i: DiscordInstall,
+  state: ReturnType<typeof readState>
+): InstallRow {
+  const st = installState(i)
+  const record = getInstall(state, i.resourcesDir)
+  const detail =
+    st.state === 'voicecord'
+      ? st.chain.join(' → ')
+      : st.state === 'otherMod'
+        ? st.requires.join(', ')
+        : st.state === 'broken'
+          ? st.reason
+          : ''
+  return {
+    branch: i.spec.branch,
+    label: i.spec.label,
+    version: i.version,
+    resourcesDir: i.resourcesDir,
+    state: st.state,
+    detail,
+    active: isVoiceCordActive(i, deps.paths.patcher),
+    staleVersion: needsReapply(record, i.version),
+    running: isRunning(deps.listProcesses, i.spec.exeName).running,
+    lastPatcherRunAt: record?.lastPatcherRunAt ?? null
+  }
+}
+
+export type OpResult = { ok: true; message: string } | { ok: false; message: string }
+
+export interface ApplyOptions {
+  /** 連鎖に足したい他 mod の patcher（Canary での連鎖テスト用） */
+  extraChain?: readonly string[]
+}
+
+export function applyTo(deps: ServiceDeps, resourcesDir: string, opts: ApplyOptions = {}): OpResult {
+  const install = findInstall(deps, resourcesDir)
+  if (!install) return { ok: false, message: `インストールが見つかりません: ${resourcesDir}` }
+
+  const check = isRunning(deps.listProcesses, install.spec.exeName)
+  if (check.running) {
+    return {
+      ok: false,
+      message: `${install.spec.label} が起動しています。終了してから実行してください（PID ${check.pids.join(', ') || '不明'}）`
+    }
+  }
+
+  const t = targetFor(resourcesDir, deps.join)
+  const plan = planPatch(deps.fs, t, { voicecordPatcher: deps.paths.patcher, extraChain: opts.extraChain })
+  if (!plan.ok) return { ok: false, message: plan.reason }
+
+  // shim が指す先を先に用意する。順序が逆だと、パッチは当たったのに
+  // patcher が無い状態で Discord が起動してしまう
+  try {
+    deployPayload(deps)
+  } catch (e) {
+    return { ok: false, message: `ペイロードの配置に失敗しました: ${msg(e)}` }
+  }
+
+  let result
+  try {
+    result = applyPatch(deps.fs, t, plan)
+  } catch (e) {
+    return { ok: false, message: msg(e) }
+  }
+
+  const state = readState(deps.fs, deps.paths.state)
+  writeState(
+    deps.fs,
+    deps.paths.state,
+    upsertInstall(state, {
+      branch: install.spec.branch,
+      discordVersion: install.version,
+      resourcesDir,
+      patchedAt: deps.now(),
+      originalSha256: result.originalSha256,
+      chain: result.chain
+    }),
+    deps.dirname
+  )
+
+  const preserved = plan.preserved.length > 0 ? `（${plan.preserved.length} 件の他 mod を引き継ぎ）` : ''
+  return { ok: true, message: `${install.spec.label} ${install.version} に適用しました${preserved}` }
+}
+
+export function unpatchFrom(deps: ServiceDeps, resourcesDir: string, mode: UnpatchMode): OpResult {
+  const install = findInstall(deps, resourcesDir)
+  if (!install) return { ok: false, message: `インストールが見つかりません: ${resourcesDir}` }
+
+  const check = isRunning(deps.listProcesses, install.spec.exeName)
+  if (check.running) {
+    return {
+      ok: false,
+      message: `${install.spec.label} が起動しています。終了してから実行してください`
+    }
+  }
+
+  const t = targetFor(resourcesDir, deps.join)
+  let result
+  try {
+    result = unpatch(deps.fs, t, mode, deps.paths.patcher)
+  } catch (e) {
+    return { ok: false, message: msg(e) }
+  }
+
+  const state = readState(deps.fs, deps.paths.state)
+  writeState(deps.fs, deps.paths.state, removeInstall(state, resourcesDir), deps.dirname)
+
+  if (result.restored) return { ok: true, message: `${install.spec.label} を素の状態に戻しました` }
+  return {
+    ok: true,
+    message: `${install.spec.label} から VoiceCord を外しました（${result.remaining.length} 件の他 mod は残しています）`
+  }
+}
+
+function findInstall(deps: ServiceDeps, resourcesDir: string): DiscordInstall | undefined {
+  return scanInstalls(deps.fs, { localAppData: deps.localAppData, join: deps.join }).find(
+    (i) => i.resourcesDir.toLowerCase() === resourcesDir.toLowerCase()
+  )
+}
+
+/** payload/ の中身を %LOCALAPPDATA%\VoiceCord\dist\ へ配る */
+export function deployPayload(deps: ServiceDeps): void {
+  copyDir(deps.fs, deps.payloadDir, deps.paths.dist, deps.join)
+}
+
+function copyDir(
+  fs: ServiceFs,
+  src: string,
+  dest: string,
+  join: (...p: string[]) => string
+): void {
+  if (!fs.existsSync(src)) throw new Error(`ビルド成果物がありません: ${src}`)
+  fs.mkdirSync(dest, { recursive: true })
+  for (const name of fs.readdirSync(src)) {
+    const from = join(src, name)
+    const to = join(dest, name)
+    const stat = fs.statSync(from)
+    if (stat.isDirectory?.()) copyDir(fs, from, to, join)
+    else fs.copyFileSync(from, to)
+  }
+}
+
+function msg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}

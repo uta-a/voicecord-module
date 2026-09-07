@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 const outDir = path.join(root, 'payload')
+const managerDir = path.join(root, 'dist-manager')
 const tmpDir = path.join(root, '.tmp')
 const watch = process.argv.includes('--watch')
 
@@ -84,6 +85,43 @@ async function buildOne(t) {
   return outfile
 }
 
+/**
+ * マネージャ（VoiceCord.exe）。Discord の中で動くペイロードとは別物なので
+ * 出力先も分ける。ルートの package.json が type:module なので、出力先に
+ * commonjs 宣言を置いて .js を CJS として読ませる。
+ */
+async function buildManager() {
+  fs.mkdirSync(managerDir, { recursive: true })
+  // ルートの package.json が type:module なので、ここに commonjs 宣言を置いて
+  // dist-manager 配下の .js を CJS として読ませる
+  fs.writeFileSync(
+    path.join(managerDir, 'package.json'),
+    JSON.stringify({ type: 'commonjs' }, null, 2) + '\n'
+  )
+
+  await build({
+    ...common,
+    entryPoints: [path.join(root, 'src/manager/main/index.ts')],
+    outfile: path.join(managerDir, 'main.js')
+  })
+  await build({
+    ...common,
+    entryPoints: [path.join(root, 'src/manager/main/managerPreload.ts')],
+    outfile: path.join(managerDir, 'managerPreload.js')
+  })
+  await build({
+    ...common,
+    format: 'iife',
+    platform: 'browser',
+    entryPoints: [path.join(root, 'src/manager/renderer/manager.ts')],
+    outfile: path.join(managerDir, 'manager.js')
+  })
+  fs.copyFileSync(
+    path.join(root, 'src/manager/renderer/manager.html'),
+    path.join(managerDir, 'manager.html')
+  )
+}
+
 async function main() {
   fs.mkdirSync(outDir, { recursive: true })
 
@@ -92,6 +130,8 @@ async function main() {
     // UI 移植（M1-e）より前は空の CSS で通す
     fs.writeFileSync(uiCssPath, '/* placeholder: tailwind の出力は M1-e で入る */\n')
   }
+
+  await buildManager()
 
   const built = []
   for (const t of targets) {

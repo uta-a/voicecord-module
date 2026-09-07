@@ -1,3 +1,4 @@
+import type { FsRead, WriteFileSync } from './fsLike.js'
 import {
   emptyState,
   installKey,
@@ -16,10 +17,8 @@ import {
  * 退避してから空の状態で続行する。
  */
 
-export interface StateFs {
-  existsSync(p: string): boolean
-  readFileSync(p: string, enc: 'utf8'): string
-  writeFileSync(p: string, data: string, enc: 'utf8'): void
+export interface StateFs extends FsRead {
+  writeFileSync: WriteFileSync
   renameSync(src: string, dest: string): void
   mkdirSync(p: string, opts: { recursive: true }): void
 }
