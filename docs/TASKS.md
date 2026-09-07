@@ -29,9 +29,9 @@
 - [x] `state.json` の読み書き（`state.ts` / `stateStore.ts`）
 
 ### M1-b ビルド
-- [ ] esbuild で patcher / preload を吐く `build.mjs`
-- [ ] Tailwind の事前コンパイル
-- [ ] `eval` / `new Function` が混入していないかのビルド時検査
+- [x] esbuild で patcher / preload を吐く `build.mjs`（`npm run build` → `payload/`）
+- [x] `eval` / `new Function` が混入していないかのビルド時検査
+- [ ] Tailwind の事前コンパイル（M1-e で有効化。今は空の CSS を流している）
 
 ### M1-c patcher（Discord main プロセス）
 - [x] サブシステムを独立させた起動（`subsystems.ts`。個別に落ちても他は動く）
@@ -43,12 +43,13 @@
       DANGEROUS_ENABLE_DEVTOOLS_... を書く形にする（オプトイン、M1-f）
 
 ### M1-d preload（isolated world）
-- [ ] splash / iframe / ポップアウトのガード
-- [ ] `window.api` ブリッジ
-- [ ] `#vc-root` の生成とスタイル注入（`adoptedStyleSheets`）
-- [ ] FAB（エンジン状態から独立して無条件に出す ＝ 可視化 1）
-- [ ] パネル枠（ドラッグ移動・リサイズ・Esc で閉じる）
-- [ ] キーボードの封じ込め（capture 段階で `stopPropagation`）
+- [x] splash / iframe / ポップアウトのガード（`guard.ts`。ホスト名の完全一致も）
+- [x] `window.api` ブリッジ（`api.ts`。contextBridge 不要、ペイロードの形も検証）
+- [x] `#vc-root` の生成とスタイル注入（`styles.ts`。adoptedStyleSheets ＋ フォールバック）
+- [x] FAB（エンジン状態から独立して無条件に出す ＝ 可視化 1、色は可視化 2）
+- [x] パネル枠（ドラッグ移動・リサイズ・Esc で閉じる）
+- [x] キーボードの封じ込め（`keyboard.ts`。document の capture に
+      stopImmediatePropagation。ホットキーは code で判定）
 
 ### M1-e UI 移植
 - [ ] 既存 renderer（`App.tsx` + 6 コンポーネント + `components/ui/*`）をコピー
