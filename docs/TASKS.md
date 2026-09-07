@@ -69,17 +69,30 @@
 - [ ] electron-builder で exe に固める（M6）
 - [ ] AV 除外の案内（M6）
 
-### M1-g 実機検証（**適用前にユーザーへ確認**）
-- [ ] Canary に適用 → Discord が正常起動
-- [ ] FAB が出る / 既存 UI が崩れずに描画される
-- [ ] Radix 系が全部操作できる
-- [ ] テキスト入力中に Discord のショートカットが暴発しない
-- [ ] **isolated world で `AudioContext` / `setSinkId` / `enumerateDevices` が動く**（判断 C の生死）
-- [ ] ポップアウト窓に FAB が出ない
-- [ ] Discord 側の回帰なし（メッセージ / VC / 画面共有 / 通知 / テーマ）
-- [ ] Vencord 連鎖テスト（Canary の shim に Vencord を足す → 外す）
-- [ ] 解除で素に戻る。適用→解除→適用を 3 往復
-- [ ] 整合性チェックの確認（24 時間常用）
+### M1-g 実機検証
+
+CDP（`--remote-debugging-port`）で機械的に確認した。Canary 1.0.1158。
+
+- [x] Canary に適用 → Discord が正常起動（**Vencord 不在なので shim 末尾の
+      冪等ブートが唯一の経路。ここが機能することの実証**）
+- [x] FAB が出る（`#vc-root` / `.vc-fab` / `.vc-panel` を DOM で確認）
+- [x] スタイルが効いている（`position:fixed` / `pointer-events:none`）。
+      **CSP は一切書き換えていない**
+- [x] ホットキー Ctrl+Shift+B で開閉、Esc で閉じる
+- [x] キー封じ込め（パネル内は止まり、パネル外は素通し）
+- [x] **isolated world の自己診断が全項目 ok**（判断 C は成立）
+      `AudioContext=ok(48000Hz) / setSinkId=ok / enumerateDevices=ok /
+      labeled=10 / adoptedStyleSheets=ok`
+- [x] `window.api` がメインワールドから見えない（`typeof window.api === "undefined"`）
+- [x] patcher が Discord の中で動いた証跡（`state.json` の `lastPatcherRunAt`）
+- [x] Vencord 連鎖テスト（Canary の shim に Vencord を足すと、FAB と Vencord と
+      Discord 本体が同時に動く。確認後 VoiceCord 単独に戻した）
+- [x] 解除で素に戻る。適用→解除→適用を 3 往復してバイト単位で一致（SHA-256）
+- [ ] 既存 UI が崩れずに描画される → M1-e のあと
+- [ ] Radix 系が全部操作できる → M1-e のあと
+- [ ] ポップアウト窓に FAB が出ない（要・実際のポップアウト操作）
+- [ ] Discord 側の回帰なし（メッセージ / VC / 画面共有 / 通知 / テーマ）→ 要・手動
+- [ ] 整合性チェックの確認（24 時間常用）→ 要・経過観察
 
 ## M2 以降
 
