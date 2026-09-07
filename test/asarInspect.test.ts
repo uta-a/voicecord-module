@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import asar from '@electron/asar'
+import * as asar from '@electron/asar'
 import { classifyAppAsar, extractRequirePaths, readAsar, readTopLevelFile, topLevelNames } from '../src/manager/patch/asarInspect.js'
 import { renderShimSource, SHIM_PACKAGE_JSON } from '../src/manager/patch/shimSource.js'
 

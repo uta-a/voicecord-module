@@ -9,10 +9,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@electron/asar": "^3.4.1"
-  },
   "devDependencies": {
+    "@electron/asar": "^4.3.0",
     "@types/node": "^22.9.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.9"
