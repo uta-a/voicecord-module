@@ -34,11 +34,13 @@
 - [ ] `eval` / `new Function` が混入していないかのビルド時検査
 
 ### M1-c patcher（Discord main プロセス）
-- [ ] サブシステムを独立させた起動（config / ipc / preload登録 / engine が個別に落ちても他は動く）
-- [ ] `session.registerPreloadScript` で preload を登録（BrowserWindow はラップしない）
-- [ ] `ipcMain` の骨格（`voicecord:` 名前空間、二重登録ガード）
-- [ ] devtools フラグ
-- [ ] 起動のたびに `state.json` を自己更新（可視化 4）
+- [x] サブシステムを独立させた起動（`subsystems.ts`。個別に落ちても他は動く）
+- [x] `session.registerPreloadScript` で preload を登録（`preloadReg.ts`。BrowserWindow はラップしない）
+- [x] `ipcMain` の骨格（`ipc.ts`。`voicecord:` 名前空間、二重登録ガード、未実装は理由つきで断る）
+- [x] shim の位置から Discord インストールを割り出す（`locate.ts`）
+- [x] 起動のたびに `state.json` を自己更新（可視化 4）
+- [ ] devtools フラグ → マネージャから Discord の settings.json に
+      DANGEROUS_ENABLE_DEVTOOLS_... を書く形にする（オプトイン、M1-f）
 
 ### M1-d preload（isolated world）
 - [ ] splash / iframe / ポップアウトのガード
