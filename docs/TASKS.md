@@ -52,13 +52,13 @@
       stopImmediatePropagation。ホットキーは code で判定）
 
 ### M1-e UI 移植
-- [x] 既存 renderer（`App.tsx` + 6 コンポーネント + `components/ui/*`）を `src/ui/` へコピー
-- [x] Tailwind を `important: '#vc-root'` + preflight 無効でスコープ化
-- [x] `index.css` のグローバルセレクタを `#vc-root` 配下へ（preflight の代替リセットも手書き）
-- [x] 出力に漏れが無いことの機械検査（`test/uiCss.test.ts`。@media / @keyframes も見る）
-- [x] Radix Portal（dialog / popover / select）を `#vc-root` 配下のコンテナへ
+- [x] 既存 renderer（`App.tsx` + 6 コンポーネント + `components/ui/*`）をコピー
+- [x] Tailwind を `important: '#vc-root'` + preflight 無効でスコープ化（`prefix` は付けない）
+- [x] `index.css` のグローバルセレクタを `#vc-root` 配下へ。preflight の代替リセットを手書き
+- [x] base 層の universal defaults も postcss で `#vc-root` 配下へ（`important` の対象外なので）
+- [x] Radix Portal を `#vc-root .vc-portal` へ固定
 - [x] `App.tsx` の `h-screen` → `h-full`
-- [x] エンジンは全部モック（`src/ui/mockApi.ts`。実体が入ったら `store.ts` の 1 行を差し替える）
+- [x] エンジンは `mockApi.ts` でモック（`store.ts` の窓口 1 行で実体に差し替えられる）
 
 ### M1-f マネージャ exe
 - [x] Electron アプリの骨格（`npm run manager` で起動）
@@ -89,8 +89,10 @@ CDP（`--remote-debugging-port`）で機械的に確認した。Canary 1.0.1158�
 - [x] Vencord 連鎖テスト（Canary の shim に Vencord を足すと、FAB と Vencord と
       Discord 本体が同時に動く。確認後 VoiceCord 単独に戻した）
 - [x] 解除で素に戻る。適用→解除→適用を 3 往復してバイト単位で一致（SHA-256）
-- [ ] 既存 UI が崩れずに描画される → M1-e のあと
-- [ ] Radix 系が全部操作できる → M1-e のあと
+- [x] 既存 UI が崩れずに描画される（要素 359 個 / タイル 33 個 / Tailwind 有効）
+- [x] Radix のダイアログが `#vc-root .vc-portal` に出る（body へ漏れていない）
+- [x] Discord 側へスタイルが漏れていない（`body` は `content-box` のまま、
+      `:root` の `--background` も未定義）
 - [ ] ポップアウト窓に FAB が出ない（要・実際のポップアウト操作）
 - [ ] Discord 側の回帰なし（メッセージ / VC / 画面共有 / 通知 / テーマ）→ 要・手動
 - [ ] 整合性チェックの確認（24 時間常用）→ 要・経過観察
