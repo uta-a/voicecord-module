@@ -62,7 +62,13 @@ function renderRow(row: InstallRow, refresh: () => void): HTMLElement {
 
   // パッチが外れると音が無言で鳴らなくなる。気付ける形で前に出す
   if (row.staleVersion) {
-    box.append(el('div', 'warn', 'Discord が更新されています。再適用が必要です。'))
+    box.append(
+      el(
+        'div',
+        'warn',
+        `${row.patchedVersion} に適用済みでしたが、Discord が ${row.version} に更新されて外れています。再適用してください。`
+      )
+    )
   }
   if (row.state === 'broken') {
     box.append(el('div', 'warn', 'この状態では操作しません。復旧手順を確認してください。'))

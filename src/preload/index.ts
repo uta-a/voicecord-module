@@ -4,6 +4,7 @@ import { createApi, type VoiceCordApi } from './api.js'
 import { frameInfoOf, shouldMount } from './guard.js'
 import { containKeyboard, DEFAULT_HOTKEY, matchesHotkey } from './keyboard.js'
 import { createShell, SHELL_CSS, type Shell } from './shell.js'
+import { probeDevices, probeSync, summarizeProbe } from './probe.js'
 import { injectStyles } from './styles.js'
 
 /**
@@ -44,6 +45,19 @@ function main(): void {
   whenBodyReady(document, () => {
     shell = createShell({ doc: document })
     document.body.appendChild(shell.root)
+
+    // isolated world で Web Audio とデバイス列挙が使えるかの自己診断。
+    // 結果を data 属性に書いておくと、メインワールドや CDP から DOM 経由で
+    // 読めるので、実機での確認を人の目に頼らずに済む。
+    try {
+      const base = probeSync()
+      shell.root.dataset['vcProbe'] = summarizeProbe(base)
+      void probeDevices(base).then((full) => {
+        if (shell) shell.root.dataset['vcProbe'] = summarizeProbe(full)
+      })
+    } catch (e) {
+      shell.root.dataset['vcProbe'] = `probe failed: ${e instanceof Error ? e.message : String(e)}`
+    }
 
     // パネル内のテキスト入力中に Discord のショートカットを暴発させない
     containKeyboard(document, {

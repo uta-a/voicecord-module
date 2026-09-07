@@ -63,6 +63,22 @@ export function upsertInstall(state: PatchState, record: InstallRecord): PatchSt
   }
 }
 
+/**
+ * 同じブランチの記録をすべて落とす。
+ *
+ * Discord は更新のたびに app-<version> ごと入れ替え、旧フォルダを消す。
+ * つまり 1 ブランチに有効なインストールは 1 つだけ。古い記録を残すと
+ * 「更新されて外れている」の判定でどちらを見るかが曖昧になり、再適用しても
+ * 警告が消えなくなる。適用時に必ず掃除する。
+ */
+export function removeBranchRecords(state: PatchState, branch: string): PatchState {
+  const installs: Record<string, InstallRecord> = {}
+  for (const [key, rec] of Object.entries(state.installs)) {
+    if (rec.branch !== branch) installs[key] = rec
+  }
+  return { version: STATE_VERSION, installs }
+}
+
 export function removeInstall(state: PatchState, resourcesDir: string): PatchState {
   const installs = { ...state.installs }
   delete installs[installKey(resourcesDir)]

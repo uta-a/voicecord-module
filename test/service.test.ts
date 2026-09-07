@@ -200,3 +200,49 @@ describe('再適用の必要性（可視化 3）', () => {
     expect(rows[0]!.active).toBe(false)
   })
 })
+
+describe('Discord の更新でパッチが外れたときの警告（実機で踏んだ回帰）', () => {
+  it('更新後の新しい app-* でも「再適用が必要」と分かる', () => {
+    // Canary 1.0.1099 に適用したあと、Discord が 1.0.1158 へ自動更新し、
+    // 旧 app-1.0.1099 が丸ごと消える、という実機で起きた状況を再現する。
+    applyTo(deps, canaryResources)
+    expect(listInstalls(deps)[0]).toMatchObject({ active: true, staleVersion: false })
+
+    const newer = path.join(root, 'Local', 'DiscordCanary', 'app-1.0.1158', 'resources')
+    fs.mkdirSync(newer, { recursive: true })
+    fs.writeFileSync(path.join(newer, 'app.asar'), plain())
+    // 旧バージョンは Discord の更新で消える
+    fs.rmSync(path.join(root, 'Local', 'DiscordCanary', 'app-1.0.1099'), { recursive: true, force: true })
+
+    const row = listInstalls(deps)[0]!
+    expect(row.version).toBe('1.0.1158')
+    expect(row.state).toBe('clean')
+    expect(row.active).toBe(false)
+    // resourcesDir で記録を引くとここが false になり、無言で鳴らなくなる
+    expect(row.staleVersion).toBe(true)
+    expect(row.patchedVersion).toBe('1.0.1099')
+  })
+
+  it('再適用すれば警告は消える', () => {
+    applyTo(deps, canaryResources)
+    const newer = path.join(root, 'Local', 'DiscordCanary', 'app-1.0.1158', 'resources')
+    fs.mkdirSync(newer, { recursive: true })
+    fs.writeFileSync(path.join(newer, 'app.asar'), plain())
+    fs.rmSync(path.join(root, 'Local', 'DiscordCanary', 'app-1.0.1099'), { recursive: true, force: true })
+
+    expect(applyTo(deps, newer).ok).toBe(true)
+    const row = listInstalls(deps)[0]!
+    expect(row).toMatchObject({ version: '1.0.1158', active: true, staleVersion: false })
+  })
+
+  it('一度も適用していないブランチには警告を出さない', () => {
+    const ptb = path.join(root, 'Local', 'DiscordPTB', 'app-1.0.1210', 'resources')
+    fs.mkdirSync(ptb, { recursive: true })
+    fs.writeFileSync(path.join(ptb, 'app.asar'), plain())
+    applyTo(deps, canaryResources)
+
+    const ptbRow = listInstalls(deps).find((r) => r.branch === 'ptb')!
+    expect(ptbRow.staleVersion).toBe(false)
+    expect(ptbRow.patchedVersion).toBeNull()
+  })
+})

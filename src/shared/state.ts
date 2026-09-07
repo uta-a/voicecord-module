@@ -113,3 +113,49 @@ export function needsReapply(record: InstallRecord | undefined, currentVersion: 
   if (record.discordVersion === '') return false
   return record.discordVersion !== currentVersion
 }
+
+/**
+ * ブランチに対する記録を探す。
+ *
+ * resourcesDir で引いてはいけない。Discord が更新されると app-<version> ごと
+ * 入れ替わって resourcesDir が変わり、旧ディレクトリは削除される。そこで
+ * resourcesDir 一致だけを見ると「記録なし ＝ 未パッチ ＝ 何も警告しない」に
+ * なってしまい、VoiceCord が外れたことに気付けない。実際に Canary の
+ * 1.0.1099 → 1.0.1158 の更新でこれが起きた。
+ *
+ * 同じブランチに複数の記録があれば、いちばん新しく適用したものを返す。
+ */
+export function findRecordForBranch(
+  state: PatchState,
+  branch: string
+): InstallRecord | undefined {
+  let best: InstallRecord | undefined
+  for (const rec of Object.values(state.installs)) {
+    if (rec.branch !== branch) continue
+    if (!best || rec.patchedAt > best.patchedAt) best = rec
+  }
+  return best
+}
+
+export type BranchStatus =
+  /** このブランチに適用した記録が無い */
+  | { kind: 'never' }
+  /** 記録どおりのバージョンに当たっている */
+  | { kind: 'current' }
+  /** 適用済みだったが Discord が更新されて外れた。再適用が要る */
+  | { kind: 'staleAfterUpdate'; patchedVersion: string }
+
+/**
+ * 「以前このブランチに適用したのに、Discord が更新されて外れていないか」を判定する。
+ * パッチが外れるとサウンドが無言で鳴らなくなるので、ここを取りこぼさない。
+ */
+export function branchStatus(
+  state: PatchState,
+  branch: string,
+  currentVersion: string
+): BranchStatus {
+  const rec = findRecordForBranch(state, branch)
+  if (!rec || rec.discordVersion === '') return { kind: 'never' }
+  if (rec.discordVersion === currentVersion) return { kind: 'current' }
+  return { kind: 'staleAfterUpdate', patchedVersion: rec.discordVersion }
+}

@@ -8,8 +8,16 @@ import {
   type ScanFs
 } from './patch/scan.js'
 import type { VoiceCordPaths } from '../shared/paths.js'
-import { needsReapply } from '../shared/state.js'
-import { getInstall, readState, removeInstall, upsertInstall, writeState, type StateFs } from '../shared/stateStore.js'
+import { branchStatus } from '../shared/state.js'
+import {
+  getInstall,
+  readState,
+  removeBranchRecords,
+  removeInstall,
+  upsertInstall,
+  writeState,
+  type StateFs
+} from '../shared/stateStore.js'
 
 /**
  * マネージャの操作をひとまとめにした層。Electron に依存しないのでテストできる。
@@ -46,8 +54,13 @@ export interface InstallRow {
   detail: string
   /** VoiceCord が連鎖に入っているか */
   active: boolean
-  /** Discord が更新されて再適用が要るか */
+  /**
+   * 以前このブランチに適用したのに Discord が更新されて外れている。
+   * 放っておくとサウンドが無言で鳴らなくなるので、UI では前に出す。
+   */
   staleVersion: boolean
+  /** 外れている場合、どのバージョンに当てていたか */
+  patchedVersion: string | null
   running: boolean
   /** patcher が Discord の中で最後に動いた日時 */
   lastPatcherRunAt: string | null
@@ -67,6 +80,9 @@ function toRow(
 ): InstallRow {
   const st = installState(i)
   const record = getInstall(state, i.resourcesDir)
+  // resourcesDir ではなくブランチで引く。Discord が更新されると
+  // app-<version> ごと入れ替わって resourcesDir が変わるため
+  const stale = branchStatus(state, i.spec.branch, i.version)
   const detail =
     st.state === 'voicecord'
       ? st.chain.join(' → ')
@@ -83,7 +99,8 @@ function toRow(
     state: st.state,
     detail,
     active: isVoiceCordActive(i, deps.paths.patcher),
-    staleVersion: needsReapply(record, i.version),
+    staleVersion: stale.kind === 'staleAfterUpdate',
+    patchedVersion: stale.kind === 'staleAfterUpdate' ? stale.patchedVersion : null,
     running: isRunning(deps.listProcesses, i.spec.exeName).running,
     lastPatcherRunAt: record?.lastPatcherRunAt ?? null
   }
@@ -131,7 +148,9 @@ export function applyTo(deps: ServiceDeps, resourcesDir: string, opts: ApplyOpti
   writeState(
     deps.fs,
     deps.paths.state,
-    upsertInstall(state, {
+    // 同じブランチの古い記録は掃除する。残すと再適用しても
+    // 「更新されて外れている」の警告が消えない
+    upsertInstall(removeBranchRecords(state, install.spec.branch), {
       branch: install.spec.branch,
       discordVersion: install.version,
       resourcesDir,
