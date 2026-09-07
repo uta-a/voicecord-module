@@ -31,7 +31,7 @@
 ### M1-b ビルド
 - [x] esbuild で patcher / preload を吐く `build.mjs`（`npm run build` → `payload/`）
 - [x] `eval` / `new Function` が混入していないかのビルド時検査
-- [ ] Tailwind の事前コンパイル（M1-e で有効化。今は空の CSS を流している）
+- [x] Tailwind の事前コンパイル（`buildCss.mjs` → `.tmp/ui.css`。preload が文字列で取り込む）
 
 ### M1-c patcher（Discord main プロセス）
 - [x] サブシステムを独立させた起動（`subsystems.ts`。個別に落ちても他は動く）
@@ -52,12 +52,13 @@
       stopImmediatePropagation。ホットキーは code で判定）
 
 ### M1-e UI 移植
-- [ ] 既存 renderer（`App.tsx` + 6 コンポーネント + `components/ui/*`）をコピー
-- [ ] Tailwind を `important: '#vc-root'` + preflight 無効でスコープ化
-- [ ] `index.css` のグローバルセレクタ 6 箇所を `#vc-root` 配下へ
-- [ ] Radix Portal 4 箇所を `#vc-root` 配下のコンテナへ
-- [ ] `App.tsx` の `h-screen` → `h-full`
-- [ ] エンジンは全部モック
+- [x] 既存 renderer（`App.tsx` + 6 コンポーネント + `components/ui/*`）を `src/ui/` へコピー
+- [x] Tailwind を `important: '#vc-root'` + preflight 無効でスコープ化
+- [x] `index.css` のグローバルセレクタを `#vc-root` 配下へ（preflight の代替リセットも手書き）
+- [x] 出力に漏れが無いことの機械検査（`test/uiCss.test.ts`。@media / @keyframes も見る）
+- [x] Radix Portal（dialog / popover / select）を `#vc-root` 配下のコンテナへ
+- [x] `App.tsx` の `h-screen` → `h-full`
+- [x] エンジンは全部モック（`src/ui/mockApi.ts`。実体が入ったら `store.ts` の 1 行を差し替える）
 
 ### M1-f マネージャ exe
 - [x] Electron アプリの骨格（`npm run manager` で起動）

@@ -2,6 +2,7 @@ import { build } from 'esbuild'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { compileUiCss } from './buildCss.mjs'
 
 /**
  * ビルド。esbuild だけで完結させる（Vite も electron-vite も使わない）。
@@ -19,7 +20,7 @@ const managerDir = path.join(root, 'dist-manager')
 const tmpDir = path.join(root, '.tmp')
 const watch = process.argv.includes('--watch')
 
-/** CSS が無い段階でも動くように、存在するときだけ取り込む */
+/** Tailwind の出力。preload が文字列として取り込む */
 const uiCssPath = path.join(tmpDir, 'ui.css')
 
 const common = {
@@ -42,13 +43,31 @@ const targets = [
     options: {}
   },
   {
+    // UI は preload とは別のファイルにする。preload はウィンドウが作られる前に
+    // 読み込まれるので document.head がまだ無く、モジュールのトップレベルで
+    // document.head を触る依存（sonner など）が入っていると読み込みの瞬間に
+    // 落ちる。Electron は preload の例外を握り潰さないので、FAB ごと出なくなる。
+    name: 'ui',
+    entry: 'src/ui/entry.ts',
+    out: 'ui.js',
+    options: {
+      loader: { '.css': 'text' },
+      jsx: 'automatic',
+      alias: {
+        '@': path.join(root, 'src/ui'),
+        '@shared': path.join(root, 'src/shared')
+      },
+      define: { 'process.env.NODE_ENV': '"production"' },
+      mainFields: ['module', 'main']
+    }
+  },
+  {
     name: 'preload',
     entry: 'src/preload/index.ts',
     out: 'preload.js',
     options: {
-      // CSS は文字列として取り込み、adoptedStyleSheets で流し込む。
-      // <link> にすると CSP の style-src に当たる
-      loader: { '.css': 'text' }
+      // ui.js は実行時に require する。バンドルに巻き込まない
+      external: [...common.external, './ui.js']
     }
   }
 ]
@@ -125,11 +144,10 @@ async function buildManager() {
 async function main() {
   fs.mkdirSync(outDir, { recursive: true })
 
-  if (!fs.existsSync(uiCssPath)) {
-    fs.mkdirSync(tmpDir, { recursive: true })
-    // UI 移植（M1-e）より前は空の CSS で通す
-    fs.writeFileSync(uiCssPath, '/* placeholder: tailwind の出力は M1-e で入る */\n')
-  }
+  // preload をバンドルする前に置く。esbuild が文字列として取り込む
+  fs.mkdirSync(tmpDir, { recursive: true })
+  fs.writeFileSync(uiCssPath, await compileUiCss(root))
+  console.log(`built: ui.css (${fs.statSync(uiCssPath).size} bytes)`)
 
   await buildManager()
 

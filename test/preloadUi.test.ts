@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
-import { clampToViewport, createShell, DOT_COLOR, ROOT_ID, SHELL_CSS } from '../src/preload/shell.js'
+import {
+  clampToViewport,
+  createShell,
+  DOT_COLOR,
+  PORTAL_CLASS,
+  ROOT_ID,
+  SHELL_CSS
+} from '../src/preload/shell.js'
+import { portalContainer } from '../src/ui/portal.js'
 import { containKeyboard, DEFAULT_HOTKEY, matchesHotkey } from '../src/preload/keyboard.js'
 import { injectStyles, type DocumentLike } from '../src/preload/styles.js'
 import { createApi, isEngineEvent, type IpcRendererLike } from '../src/preload/api.js'
@@ -189,6 +197,31 @@ describe('createShell', () => {
     shell.destroy()
   })
 
+  it('React のマウント先は状態表示と別の要素にする', () => {
+    // setStatus は replaceChildren で書き直すので、同じ要素を React にも渡すと
+    // 状態が更新されるたびに UI が消える
+    const shell = createShell({ doc: document })
+    const marker = document.createElement('span')
+    shell.body.appendChild(marker)
+    shell.setStatus(STATUS)
+    expect(shell.body.contains(marker)).toBe(true)
+    expect(shell.root.querySelector('.vc-kv')).not.toBeNull()
+    shell.destroy()
+  })
+
+  it('Radix の Portal 用のコンテナを #vc-root 配下に持つ', () => {
+    const shell = createShell({ doc: document })
+    document.body.appendChild(shell.root)
+    expect(shell.portal.className).toBe(PORTAL_CLASS)
+    expect(shell.root.contains(shell.portal)).toBe(true)
+    // パネルより後ろ = ダイアログがパネルの下に潜らない
+    const kids = [...shell.root.children]
+    expect(kids.indexOf(shell.portal)).toBeGreaterThan(
+      kids.indexOf(shell.root.querySelector('.vc-panel')!)
+    )
+    shell.destroy()
+  })
+
   it('destroy で DOM から消える', () => {
     const shell = createShell({ doc: document })
     document.body.appendChild(shell.root)
@@ -215,6 +248,20 @@ describe('createShell', () => {
   it('閉じているときクリックを吸わない', () => {
     expect(SHELL_CSS).toContain('pointer-events: none')
     expect(SHELL_CSS).toContain('pointer-events: auto')
+  })
+})
+
+describe('portalContainer', () => {
+  it('shell がまだ無ければ undefined を返す（Radix は既定の body へ落ちる）', () => {
+    document.getElementById(ROOT_ID)?.remove()
+    expect(portalContainer()).toBeUndefined()
+  })
+
+  it('マウント後は #vc-root 配下のコンテナを返す', () => {
+    const shell = createShell({ doc: document })
+    document.body.appendChild(shell.root)
+    expect(portalContainer()).toBe(shell.portal)
+    shell.destroy()
   })
 })
 
@@ -272,5 +319,37 @@ describe('isEngineEvent', () => {
 describe('DOT_COLOR', () => {
   it('4 状態すべてに色がある', () => {
     expect(Object.keys(DOT_COLOR).sort()).toEqual(['attached', 'failed', 'searching', 'starting'])
+  })
+})
+
+describe('状態表示の出し分け', () => {
+  it('正常なときは何も出さない（サウンドボードの領域を食わない）', () => {
+    const shell = createShell({ doc: document })
+    shell.setStatus({ ...STATUS, engine: 'attached', attachedPid: 30736 })
+    const status = shell.root.querySelector<HTMLElement>('.vc-status')!
+    expect(status.hidden).toBe(true)
+    shell.destroy()
+  })
+
+  it('attach 前は状態を出す', () => {
+    const shell = createShell({ doc: document })
+    shell.setStatus({ ...STATUS, engine: 'searching' })
+    const status = shell.root.querySelector<HTMLElement>('.vc-status')!
+    expect(status.hidden).toBe(false)
+    expect(status.textContent).toContain('canary')
+    shell.destroy()
+  })
+
+  it('attach 済みでも問題があれば出す', () => {
+    const shell = createShell({ doc: document })
+    shell.setStatus({
+      ...STATUS,
+      engine: 'attached',
+      degraded: [{ name: 'state', error: 'state.json を書けません' }]
+    })
+    const status = shell.root.querySelector<HTMLElement>('.vc-status')!
+    expect(status.hidden).toBe(false)
+    expect(status.textContent).toContain('state.json を書けません')
+    shell.destroy()
   })
 })

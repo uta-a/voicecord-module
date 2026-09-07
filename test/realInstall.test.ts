@@ -24,14 +24,19 @@ describe('実機の Discord インストール', () => {
     }
   })
 
-  it.skipIf(!canary)('Canary の app.asar は素の Discord (plain)', () => {
-    expect(canary!.status.kind).toBe('plain')
-    if (canary!.status.kind === 'plain') expect(canary!.status.size).toBeGreaterThan(1_000_000)
+  // Canary は開発対象なので、パッチが当たっている状態と当たっていない状態を
+  // 行き来する。どちらでも成り立つ不変条件だけを見る。
+  // （当初は「未パッチであること」を書いていたが、開発でパッチを当てた途端に
+  //   落ちるテストになった。実機の状態に依存する断定は書かない）
+  it.skipIf(!canary)('Canary は broken ではない', () => {
+    const st = installState(canary!)
+    expect(['clean', 'otherMod', 'voicecord']).toContain(st.state)
   })
 
-  it.skipIf(!canary)('Canary は未パッチ (clean)', () => {
-    expect(canary!.hasBackup).toBe(false)
-    expect(installState(canary!)).toEqual({ state: 'clean' })
+  it.skipIf(!canary)('Canary が未パッチなら app.asar は Discord 本体', () => {
+    if (canary!.hasBackup) return
+    expect(canary!.status.kind).toBe('plain')
+    if (canary!.status.kind === 'plain') expect(canary!.status.size).toBeGreaterThan(1_000_000)
   })
 
   it.skipIf(!stable)('Stable は素か、他 mod 入りか、VoiceCord 入りのいずれか（broken でない）', () => {
@@ -54,10 +59,41 @@ describe('実機の Discord インストール', () => {
     expect(st.requires.every((p) => p.length > 0)).toBe(true)
   })
 
-  it.skipIf(!installs.length)('VoiceCord は未導入なので、どのインストールでも非アクティブ', () => {
-    // 実装が進んで実際に適用したら、このテストは期待値を変える必要がある
-    const fake = path.join(LOCAL, 'VoiceCord', 'dist', 'patcher.js')
-    if (fs.existsSync(fake)) return
-    for (const i of installs) expect(isVoiceCordActive(i, fake)).toBe(false)
+  it.skipIf(!installs.length)('active の判定が実物の連鎖と一致する', () => {
+    const patcher = path.join(LOCAL, 'VoiceCord', 'dist', 'patcher.js')
+    for (const i of installs) {
+      const inChain =
+        i.status.kind === 'shim' &&
+        i.status.chain.some((p) => p.toLowerCase() === patcher.toLowerCase())
+      expect(isVoiceCordActive(i, patcher)).toBe(inChain)
+    }
+  })
+})
+
+describe('パッチが当たっているインストール（実機）', () => {
+  const patched = installs.filter((i) => i.status.kind === 'shim')
+
+  it.skipIf(!patched.length)('必ず _app.asar に Discord 本体が退避されている', () => {
+    for (const i of patched) {
+      const backup = classifyAppAsar(fs, path.join(i.resourcesDir, '_app.asar'))
+      expect(backup.kind).toBe('plain')
+      if (backup.kind === 'plain') expect(backup.size).toBeGreaterThan(1_000_000)
+    }
+  })
+
+  it.skipIf(!patched.length)('連鎖の先頭は VoiceCord の patcher', () => {
+    for (const i of patched) {
+      if (i.status.kind !== 'shim') continue
+      // Vencord は最終行で Discord をブートし切るので、VoiceCord が後ろに
+      // 回ると preload の登録が間に合わない
+      expect(i.status.chain[0]?.toLowerCase()).toContain('voicecord')
+    }
+  })
+
+  it.skipIf(!patched.length)('連鎖の patcher が実在する', () => {
+    for (const i of patched) {
+      if (i.status.kind !== 'shim') continue
+      for (const p of i.status.chain) expect(fs.existsSync(p)).toBe(true)
+    }
   })
 })

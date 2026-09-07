@@ -1,4 +1,6 @@
 import { ipcRenderer } from 'electron'
+import path from 'node:path'
+import type { MountResult } from '../ui/entry.js'
 import type { VoiceCordStatus } from '../shared/ipc.js'
 import { createApi, type VoiceCordApi } from './api.js'
 import { frameInfoOf, shouldMount } from './guard.js'
@@ -41,10 +43,28 @@ function main(): void {
   injectStyles(document, SHELL_CSS)
 
   let shell: Shell | null = null
+  let uiError: string | null = null
 
   whenBodyReady(document, () => {
     shell = createShell({ doc: document })
     document.body.appendChild(shell.root)
+
+    // UI は別バンドルにして、DOM が用意できてから初めて読み込む。
+    // preload と同じバンドルに入れると、sonner のようにモジュールの
+    // トップレベルで document.head を触る依存が読み込みの瞬間に落ち、
+    // Electron が preload ごと捨てて FAB すら出なくなる。
+    // ここが落ちても FAB と状態表示は残す（パッチが当たっていることと、
+    // 落ちた理由を出せる状態は保つ）。
+    try {
+      const ui = require(path.join(__dirname, 'ui.js')) as { mount: (c: HTMLElement) => MountResult }
+      const mounted = ui.mount(shell.body)
+      // Tailwind の出力。全セレクタが #vc-root で始まるように作ってあるので、
+      // Discord 側のスタイルには一切触れない（buildCss.mjs と test/uiCss.test.ts）
+      injectStyles(document, mounted.css)
+    } catch (e) {
+      console.error('[VoiceCord] UI のマウントに失敗しました', e)
+      uiError = e instanceof Error ? e.message : String(e)
+    }
 
     // isolated world で Web Audio とデバイス列挙が使えるかの自己診断。
     // 結果を data 属性に書いておくと、メインワールドや CDP から DOM 経由で
@@ -82,7 +102,12 @@ function main(): void {
       { capture: true }
     )
 
-    const apply = (s: VoiceCordStatus): void => shell?.setStatus(s)
+    // UI のマウントに失敗していたら、その理由も状態に混ぜて出す。
+    // FAB は出ているのにパネルが空、という無言の失敗を作らない
+    const apply = (s: VoiceCordStatus): void =>
+      shell?.setStatus(
+        uiError === null ? s : { ...s, degraded: [...s.degraded, { name: 'ui', error: uiError }] }
+      )
     api.onEvent((ev) => {
       if (ev.ev === 'status') apply(ev.status)
     })

@@ -14,6 +14,12 @@ import type { EngineState, VoiceCordStatus } from '../shared/ipc.js'
 
 export const ROOT_ID = 'vc-root'
 
+/**
+ * Radix の Portal の行き先。既定の document.body へ出すと #vc-root の外になり、
+ * #vc-root にスコープした Tailwind が一切効かない。
+ */
+export const PORTAL_CLASS = 'vc-portal'
+
 /** エンジンの状態と FAB の色の対応（可視化 2） */
 export const DOT_COLOR: Record<EngineState, string> = {
   starting: '#8a8f98',
@@ -43,7 +49,8 @@ export const SHELL_CSS = `
   color-scheme: dark;
 }
 #${ROOT_ID} .vc-fab,
-#${ROOT_ID} .vc-panel {
+#${ROOT_ID} .vc-panel,
+#${ROOT_ID} .${PORTAL_CLASS} {
   pointer-events: auto;
 }
 #${ROOT_ID} .vc-fab {
@@ -73,6 +80,10 @@ export const SHELL_CSS = `
   position: absolute;
   display: none;
   flex-direction: column;
+  /* 既定のサイズを持たせる。position:absolute の shrink-to-fit のままだと高さが
+     内容依存になり、中の UI の h-full / flex-1 が解決できず縦につぶれる */
+  width: min(1000px, calc(100vw - 32px));
+  height: min(640px, calc(100vh - 32px));
   min-width: 360px;
   min-height: 240px;
   border-radius: 8px;
@@ -108,10 +119,16 @@ export const SHELL_CSS = `
   border-radius: 4px;
 }
 #${ROOT_ID} .vc-close:hover { background: rgba(255, 255, 255, 0.08); }
+#${ROOT_ID} .vc-status {
+  flex: none;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
 #${ROOT_ID} .vc-body {
   flex: 1;
-  overflow: auto;
-  padding: 12px;
+  /* React がここを丸ごと持つ。スクロールは中の UI に任せる */
+  overflow: hidden;
+  min-height: 0;
 }
 #${ROOT_ID} .vc-kv {
   display: grid;
@@ -149,8 +166,10 @@ export function clampToViewport(p: Point, size: Point, viewport: Point): Point {
 
 export interface Shell {
   root: HTMLElement
-  /** M1-e ではここに React をマウントする */
+  /** React のマウント先。ここは React だけが触る */
   body: HTMLElement
+  /** Radix の Portal（ダイアログ・ポップオーバー・セレクト）の行き先 */
+  portal: HTMLElement
   isOpen: () => boolean
   open: () => void
   close: () => void
@@ -197,11 +216,20 @@ export function createShell(opts: ShellOptions): Shell {
   close.textContent = '×'
   close.setAttribute('aria-label', '閉じる')
   head.append(title, spacer, close)
+  // エンジンの状態は React とは別の場所に出す。同じ要素を両方が書き換えると、
+  // setStatus の replaceChildren が React のマウント先を消してしまう
+  const status = doc.createElement('div')
+  status.className = 'vc-status'
   const body = doc.createElement('div')
   body.className = 'vc-body'
-  panel.append(head, body)
+  panel.append(head, status, body)
 
-  root.append(fab, panel)
+  // パネルより後ろに置く。位置指定済みの兄弟どうしは DOM 順で重なるので、
+  // ダイアログやポップオーバーがパネルの下に潜らない
+  const portal = doc.createElement('div')
+  portal.className = PORTAL_CLASS
+
+  root.append(fab, panel, portal)
 
   const fabPos = opts.fabPos ?? { x: 16, y: viewportOf(doc).y - 64 }
   const panelPos = opts.panelPos ?? { x: 80, y: 80 }
@@ -228,12 +256,13 @@ export function createShell(opts: ShellOptions): Shell {
     const label = DOT_LABEL[s.engine]
     fab.title = `VoiceCord — ${label}\n${s.discordBuild} ${s.discordVersion}` +
       (s.attachedPid !== null ? `\naudio PID ${s.attachedPid}` : '')
-    renderBody(doc, body, s)
+    renderStatus(doc, status, s)
   }
 
   return {
     root,
     body,
+    portal,
     isOpen,
     open: () => setOpen(true),
     close: () => setOpen(false),
@@ -247,8 +276,20 @@ export function createShell(opts: ShellOptions): Shell {
   }
 }
 
-function renderBody(doc: Document, body: HTMLElement, s: VoiceCordStatus): void {
+function renderStatus(doc: Document, body: HTMLElement, s: VoiceCordStatus): void {
   body.replaceChildren()
+
+  // 正常に動いているときは何も出さない。常時 3 行の診断を出すと、その分だけ
+  // サウンドボードの領域が減り続ける。平常時のシグナルは FAB の色とツールチップに
+  // 任せ、パネルは「何かおかしいときに理由が読める場所」に徹する。
+  const problems = [
+    ...(s.lastError ? [s.lastError] : []),
+    ...s.degraded.map((d) => `${d.name}: ${d.error}`)
+  ]
+  const healthy = s.engine === 'attached' && problems.length === 0
+  body.hidden = healthy
+  if (healthy) return
+
   const dl = doc.createElement('dl')
   dl.className = 'vc-kv'
   const rows: Array<[string, string]> = [
@@ -266,10 +307,6 @@ function renderBody(doc: Document, body: HTMLElement, s: VoiceCordStatus): void 
   body.append(dl)
 
   // 無言で失敗させない。落ちたサブシステムと理由をそのまま出す
-  const problems = [
-    ...(s.lastError ? [s.lastError] : []),
-    ...s.degraded.map((d) => `${d.name}: ${d.error}`)
-  ]
   if (problems.length > 0) {
     const box = doc.createElement('div')
     box.className = 'vc-error'
