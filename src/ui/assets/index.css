@@ -132,14 +132,22 @@
     letter-spacing: 0;
   }
 
-  /* 移植元の body。パネルの中身なので高さは器（.vc-body）に従わせる。 */
+  /* 移植元の body。ただし塗りだけはここに置けない。
+     #vc-root は position:fixed / inset:0 の全画面オーバーレイなので、
+     不透明な背景を当てると Discord 全体を覆い隠してしまう。しかも
+     pointer-events:none でクリックは透過するため、操作はできるのに
+     見た目だけが真っ黒になり、原因が非常に分かりにくい（実機で踏んだ）。
+     継承するだけの指定（文字色・フォント）はここでよい。 */
   #vc-root {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
     margin: 0;
     user-select: none;
     font-family: 'Segoe UI Variable', 'Segoe UI', 'Yu Gothic UI', 'Meiryo UI', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
+
+  /* 塗りはパネルの中身（.vc-body）だけに限る。.vc-body は器（shell.ts）が
+     持つ要素なので、塗りの指定も SHELL_CSS 側に置いてある。 */
 
   #vc-root button,
   #vc-root input {

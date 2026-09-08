@@ -353,3 +353,31 @@ describe('状態表示の出し分け', () => {
     shell.destroy()
   })
 })
+
+describe('FAB の既定位置', () => {
+  it('settle で右下に寄る（Discord のユーザーパネルを塞がない）', () => {
+    // 左下には Discord のマイク・スピーカー・設定ボタンがある
+    const shell = createShell({ doc: document })
+    document.body.appendChild(shell.root)
+    const fab = shell.root.querySelector<HTMLElement>('.vc-fab')!
+    // jsdom では実寸が 0 なので、測れたことにして詰める
+    fab.getBoundingClientRect = () =>
+      ({ left: 9999, top: 9999, width: 100, height: 30 }) as DOMRect
+    shell.settle()
+    // 右下から余白ぶん内側に入る
+    expect(parseFloat(fab.style.left)).toBeLessThan(window.innerWidth)
+    expect(parseFloat(fab.style.left)).toBeGreaterThan(0)
+    expect(parseFloat(fab.style.top)).toBeLessThan(window.innerHeight)
+    shell.destroy()
+  })
+
+  it('位置を明示したときは settle で動かさない', () => {
+    const shell = createShell({ doc: document, fabPos: { x: 10, y: 20 } })
+    document.body.appendChild(shell.root)
+    const fab = shell.root.querySelector<HTMLElement>('.vc-fab')!
+    shell.settle()
+    expect(fab.style.left).toBe('10px')
+    expect(fab.style.top).toBe('20px')
+    shell.destroy()
+  })
+})

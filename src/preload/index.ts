@@ -48,6 +48,8 @@ function main(): void {
   whenBodyReady(document, () => {
     shell = createShell({ doc: document })
     document.body.appendChild(shell.root)
+    // 実寸が測れるのは DOM に入れたあと。FAB の既定位置はここで決まる
+    shell.settle()
 
     // UI は別バンドルにして、DOM が用意できてから初めて読み込む。
     // preload と同じバンドルに入れると、sonner のようにモジュールの

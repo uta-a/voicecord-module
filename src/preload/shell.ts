@@ -129,6 +129,13 @@ export const SHELL_CSS = `
   /* React がここを丸ごと持つ。スクロールは中の UI に任せる */
   overflow: hidden;
   min-height: 0;
+  /* 移植元の body の塗り。#vc-root には絶対に置かないこと。#vc-root は
+     position:fixed / inset:0 の全画面オーバーレイなので、不透明な塗りを
+     当てると Discord 全体を覆い隠す。pointer-events:none でクリックは
+     透過するため「操作はできるのに画面が真っ黒」という分かりにくい
+     壊れ方をする（実機で踏んだ）。--background は UI の CSS が
+     #vc-root に定義するので、未読込なら透明になりパネルの色が出る。 */
+  background: hsl(var(--background));
 }
 #${ROOT_ID} .vc-kv {
   display: grid;
@@ -170,6 +177,8 @@ export interface Shell {
   body: HTMLElement
   /** Radix の Portal（ダイアログ・ポップオーバー・セレクト）の行き先 */
   portal: HTMLElement
+  /** DOM に入れたあとに呼ぶ。実寸が測れて初めて決まる位置を詰める */
+  settle: () => void
   isOpen: () => boolean
   open: () => void
   close: () => void
@@ -180,7 +189,7 @@ export interface Shell {
 
 export interface ShellOptions {
   doc: Document
-  /** FAB の初期位置。無ければ左下 */
+  /** FAB の初期位置。無ければ右下（Discord のユーザーパネルを避ける） */
   fabPos?: Point
   /** パネルの初期位置 */
   panelPos?: Point
@@ -231,7 +240,11 @@ export function createShell(opts: ShellOptions): Shell {
 
   root.append(fab, panel, portal)
 
-  const fabPos = opts.fabPos ?? { x: 16, y: viewportOf(doc).y - 64 }
+  // 既定は右下。左下には Discord のユーザーパネル（マイク・スピーカー・設定）が
+  // あり、そこへ重ねるとミュート操作を塞いでしまう。
+  // 幅は DOM に入るまで測れないので、いったん端へ置いて settle() で詰める。
+  const vp = viewportOf(doc)
+  const fabPos = opts.fabPos ?? { x: vp.x, y: vp.y }
   const panelPos = opts.panelPos ?? { x: 80, y: 80 }
   place(fab, fabPos)
   place(panel, panelPos)
@@ -263,6 +276,11 @@ export function createShell(opts: ShellOptions): Shell {
     root,
     body,
     portal,
+    settle: () => {
+      // 既定位置を使っているときだけ詰める。ユーザーが動かした位置は動かさない
+      if (opts.fabPos) return
+      keepInView(fab, doc, FAB_MARGIN_PX)
+    },
     isOpen,
     open: () => setOpen(true),
     close: () => setOpen(false),
@@ -325,12 +343,16 @@ function place(el: HTMLElement, p: Point): void {
   el.style.top = `${p.y}px`
 }
 
-function keepInView(el: HTMLElement, doc: Document): void {
+/** 端に貼り付かないよう、既定位置には余白を持たせる */
+const FAB_MARGIN_PX = 16
+
+function keepInView(el: HTMLElement, doc: Document, margin = 0): void {
   const rect = el.getBoundingClientRect()
+  const vp = viewportOf(doc)
   const p = clampToViewport(
     { x: rect.left, y: rect.top },
-    { x: rect.width, y: rect.height },
-    viewportOf(doc)
+    { x: rect.width + margin, y: rect.height + margin },
+    vp
   )
   place(el, p)
 }

@@ -109,3 +109,56 @@ describe('scopeToRoot', () => {
     expect(out.css).not.toContain('#vc-root from')
   })
 })
+
+describe('#vc-root 自身は塗らない', () => {
+  /**
+   * #vc-root は position:fixed / inset:0 の全画面オーバーレイ。ここに不透明な
+   * 塗りが当たると Discord 全体を覆い隠す。しかも pointer-events:none で
+   * クリックは透過するので「操作はできるのに画面が真っ黒」という、原因の
+   * 分かりにくい壊れ方をする。実機で踏んだので機械的に見る。
+   *
+   * 継承するだけの指定（color / font / letter-spacing）は塗らないので対象外。
+   */
+  const PAINTING = /^(background|box-shadow|backdrop-filter|outline)/
+
+  it('ビルド済み CSS で #vc-root 自身に塗りの宣言が無い', () => {
+    const offenders: string[] = []
+    postcss.parse(css).walkRules((rule: Rule) => {
+      if (inKeyframes(rule.parent as Container)) return
+      // 「#vc-root」ちょうどに当たるセレクタだけを見る。
+      // 子孫（#vc-root .vc-body など）はパネルの中なので塗ってよい
+      const hitsRootItself = rule.selectors.some((s) => s.trim() === ROOT_SELECTOR)
+      if (!hitsRootItself) return
+      rule.walkDecls((d) => {
+        if (PAINTING.test(d.prop)) offenders.push(`${rule.selector} { ${d.prop}: ${d.value} }`)
+      })
+    })
+    expect(offenders).toEqual([])
+  })
+
+  it('器のスタイル（SHELL_CSS）でも #vc-root 自身を塗らない', async () => {
+    const { SHELL_CSS } = await import('../src/preload/shell.js')
+    const offenders: string[] = []
+    postcss.parse(SHELL_CSS).walkRules((rule: Rule) => {
+      if (!rule.selectors.some((s) => s.trim() === ROOT_SELECTOR)) return
+      rule.walkDecls((d) => {
+        if (PAINTING.test(d.prop)) offenders.push(`${rule.selector} { ${d.prop}: ${d.value} }`)
+      })
+    })
+    expect(offenders).toEqual([])
+  })
+
+  it('パネルの中身には塗りが当たっている（背景を失っていないこと）', async () => {
+    // 上の検査を「塗りを全部消す」で通してしまわないための対の検査。
+    // .vc-body は器が持つ要素なので、塗りも SHELL_CSS 側にある
+    const { SHELL_CSS } = await import('../src/preload/shell.js')
+    let painted = false
+    postcss.parse(SHELL_CSS).walkRules((rule: Rule) => {
+      if (!rule.selector.includes('.vc-body')) return
+      rule.walkDecls((d) => {
+        if (/^background/.test(d.prop)) painted = true
+      })
+    })
+    expect(painted).toBe(true)
+  })
+})
