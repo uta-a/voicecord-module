@@ -124,11 +124,25 @@ CDP（`--remote-debugging-port`）で機械的に確認した。Canary 1.0.1158�
 - [x] デコード経路（`preload/decode.ts`）。**M4 のデコード実装をここへ前倒し**
 - [x] `play` は PCM を engine へ渡してから鳴らす
 
-### M2-e 実機確認（Canary）— 未実施
-- [ ] UI の状態機械がスタブのイベントで端から端まで駆動する
-- [ ] 旧 config から `sourceVolumes` と `calibration` が引き継がれ、旧ファイルは残る
-- [ ] スタブエンジンを外から kill → FAB が赤 → 3 秒で再起動して戻る
-- [ ] `chooseFolder` のダイアログが Discord の窓を親にして開く
+### M2-e 実機確認（Canary 1.0.1165）
+
+CDP（`--remote-debugging-port=9223`）で機械的に確認した。
+
+- [x] UI の状態機械がスタブのイベントで駆動する（タイル 32 件 / 「VC接続済」／
+      `効果音と声の差 -6.5 dB`。スタブの `vc active` が store まで届いている）
+- [x] 旧 config から `sourceVolumes` 32 件と `calibration` が引き継がれ、
+      **旧ファイルは残っている**
+- [x] エンジンだけを kill → `failed`（理由つき）→ バックオフ後に再起動 →
+      `searching` → `attached`。実測: `+1.8s failed …5 秒後に再起動します` →
+      `+6.8s searching` → `+8.3s attached`
+- [x] `chooseFolder` のダイアログが Discord の窓を親にして開く。
+      実測: ダイアログ（class `#32770`）の `owner` が Discord のメインウィンドウ、
+      かつ Discord 側が `enabled=False`（＝モーダル）。キャンセルで `null` が返る
+- [x] ページ再読み込みでエンジンを殺さない（`enginePid` が前後で同一）
+
+実機で 2 点直した（`439cd99`）
+- `attach` が毎回エンジンを再起動していた（M3 では frida ごと落ちる）
+- どのプロセスがエンジンか実機で判別できなかった → `enginePid` を状態に追加
 
 ## M3 以降
 
