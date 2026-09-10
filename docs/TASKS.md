@@ -97,10 +97,44 @@ CDP（`--remote-debugging-port`）で機械的に確認した。Canary 1.0.1158�
 - [ ] Discord 側の回帰なし（メッセージ / VC / 画面共有 / 通知 / テーマ）→ 要・手動
 - [ ] 整合性チェックの確認（24 時間常用）→ 要・経過観察
 
-## M2 以降
+## M2 — IPC 疎通（エンジンはスタブ）
 
-計画ファイル参照。M2 = IPC 疎通（エンジンはフェイク）、M3 = 実エンジン、
-M4 = ffmpeg 廃止、M5 = 堅牢化、M6 = マネージャ仕上げ、M7 = Stable 受け入れ。
+### M2-a config
+- [x] 読み書きと sanitize（`shared/config.ts`）。BOM / .broken 退避 / tmp→rename
+- [x] 旧 `%APPDATA%oicecord\config.json` からの一度きり・非破壊な移行
+- [x] 既定の音源フォルダ `%USERPROFILE%\Documents\VoiceCord\sounds` を自動作成
+
+### M2-b エンジンの監督
+- [x] `utilityProcess.fork` の子として起こす（`patcher/engineHost.ts`）
+- [x] 落ちたら 3s→5s→10s→30s のバックオフで再起動。10 秒生き延びたら先頭へ戻す
+- [x] 死んだときに待っている要求を必ず落とす（UI の Promise を吊らせない）
+- [x] stdout / stderr を `{ev:'log'}` として UI へ（別窓を開かずに読める）
+- [x] スタブエンジン（`src/engine/stub.mjs` → `payload/engine.mjs`）
+- [x] IPC のイベント型に `engine` 変種。`EngineEvent` → `VoiceCordEvent` へ改名
+
+### M2-c IPC の配線
+- [x] 15 チャンネルを実体へ。設定とファイルは patcher、再生系は engine へ転送
+- [x] `scanFolder`（`patcher/soundsFs.ts`。id 採番の規則は移植元のまま）
+- [x] `readSoundFile` のパス検証（realpath / フォルダ配下 / 音声拡張子のみ）
+- [x] `chooseFolder` は Discord の窓を親にして開く
+- [x] `reattach` は転送ではなくエンジンの起こし直し
+
+### M2-d renderer の窓口
+- [x] `store.ts` の `engineApi` を `window.api` に差し替え（不在ならモック）
+- [x] デコード経路（`preload/decode.ts`）。**M4 のデコード実装をここへ前倒し**
+- [x] `play` は PCM を engine へ渡してから鳴らす
+
+### M2-e 実機確認（Canary）— 未実施
+- [ ] UI の状態機械がスタブのイベントで端から端まで駆動する
+- [ ] 旧 config から `sourceVolumes` と `calibration` が引き継がれ、旧ファイルは残る
+- [ ] スタブエンジンを外から kill → FAB が赤 → 3 秒で再起動して戻る
+- [ ] `chooseFolder` のダイアログが Discord の窓を親にして開く
+
+## M3 以降
+
+計画ファイル参照。M3 = 実エンジン（frida）、M4 = 旧経路との突き合わせと
+`.wma` のエラー表面化、M4.5 = Discord ネイティブ意匠への UI 作り替え、
+M5 = 堅牢化、M6 = マネージャ仕上げ、M7 = Stable 受け入れ。
 
 ## M4.5 — Discord ネイティブ意匠への UI 作り替え
 
