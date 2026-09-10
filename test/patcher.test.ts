@@ -209,6 +209,7 @@ const CONFIG: AppConfig = defaultConfig('C:/sounds')
 const STATUS: VoiceCordStatus = {
   engine: 'starting',
   attachedPid: null,
+  enginePid: null,
   discordBuild: 'canary',
   discordVersion: '1.0.1099',
   lastError: null,

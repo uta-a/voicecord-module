@@ -267,8 +267,12 @@ export function createShell(opts: ShellOptions): Shell {
   const setStatus = (s: VoiceCordStatus): void => {
     dot.style.background = DOT_COLOR[s.engine]
     const label = DOT_LABEL[s.engine]
-    fab.title = `VoiceCord — ${label}\n${s.discordBuild} ${s.discordVersion}` +
-      (s.attachedPid !== null ? `\naudio PID ${s.attachedPid}` : '')
+    // どのプロセスがエンジンかを実機で判別できるようにする。Discord 自身も
+    // node.mojom.NodeService を持っていて、コマンドラインでは区別できない
+    fab.title =
+      `VoiceCord — ${label}\n${s.discordBuild} ${s.discordVersion}` +
+      (s.attachedPid !== null ? `\naudio PID ${s.attachedPid}` : '') +
+      (s.enginePid !== null ? `\nengine PID ${s.enginePid}` : '')
     renderStatus(doc, status, s)
   }
 
@@ -313,7 +317,10 @@ function renderStatus(doc: Document, body: HTMLElement, s: VoiceCordStatus): voi
   const rows: Array<[string, string]> = [
     ['状態', DOT_LABEL[s.engine]],
     ['ビルド', `${s.discordBuild} ${s.discordVersion}`],
-    ['音声プロセス', s.attachedPid === null ? '未検出' : String(s.attachedPid)]
+    ['音声プロセス', s.attachedPid === null ? '未検出' : String(s.attachedPid)],
+    // どのプロセスを見ればいいかが分からないと、エンジンだけを落として
+    // 復帰を確かめる、といった切り分けができない
+    ['エンジン', s.enginePid === null ? '起動していません' : `PID ${s.enginePid}`]
   ]
   for (const [k, v] of rows) {
     const dt = doc.createElement('dt')

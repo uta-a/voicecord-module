@@ -55,6 +55,7 @@ function main(): void {
   const status: VoiceCordStatus = {
     engine: 'starting',
     attachedPid: null,
+    enginePid: null,
     discordBuild: install ? guessBranch(install.resourcesDir) : 'unknown',
     discordVersion: install?.version ?? 'unknown',
     lastError: null,
@@ -122,6 +123,10 @@ function main(): void {
           onState: (state, attachedPid, error) => {
             status.engine = state
             status.attachedPid = attachedPid
+            // 実機で「どのプロセスがエンジンか」を判別する唯一の手がかり。
+            // Discord 自身も node.mojom.NodeService を持っていて、
+            // コマンドラインでは我々の子と区別できない
+            status.enginePid = host.pid()
             status.lastError = error
             broadcastStatus()
           },

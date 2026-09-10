@@ -92,6 +92,7 @@ describe('decodeToMono', () => {
 const STATUS: VoiceCordStatus = {
   engine: 'attached',
   attachedPid: 4242,
+  enginePid: null,
   discordBuild: 'canary',
   discordVersion: '1.0.1165',
   lastError: null,
@@ -149,7 +150,7 @@ describe('createApi', () => {
     expect(ipc.calls[1]?.args[0]).toBe('1_2')
   })
 
-  it('attach は reattach を呼び、状態を AttachResult に写す', async () => {
+  it('attach は健全なエンジンを起こし直さない（Ctrl+R のたびに殺さない）', async () => {
     const ipc = fakeIpc()
     const api = createApi(ipc, stereo)
     expect(await api.attach('canary')).toEqual({
@@ -157,12 +158,31 @@ describe('createApi', () => {
       pid: 4242,
       label: 'canary 1.0.1165'
     })
-    expect(ipc.calls[0]?.ch).toBe(CH.reattach)
+    expect(ipc.calls.map((c) => c.ch)).toEqual([CH.getStatus])
   })
 
-  it('エンジンが failed なら attach は ok:false', async () => {
-    const ipc = fakeIpc({ [CH.reattach]: { ...STATUS, engine: 'failed', attachedPid: null } })
-    expect((await createApi(ipc, stereo).attach('canary')).ok).toBe(false)
+  it('エンジンが落ちているときだけ起こし直す', async () => {
+    const dead = { ...STATUS, engine: 'failed' as const, attachedPid: null }
+    const ipc = fakeIpc({ [CH.getStatus]: dead, [CH.reattach]: dead })
+    const r = await createApi(ipc, stereo).attach('canary')
+    expect(r.ok).toBe(false)
+    expect(ipc.calls.map((c) => c.ch)).toEqual([CH.getStatus, CH.reattach])
+  })
+
+  it('starting の間は落ち着くまで待つ（PID null で「見つからず」に見せない）', async () => {
+    let n = 0
+    const ipc = fakeIpc()
+    const orig = ipc.invoke
+    ipc.invoke = async (ch, ...args) => {
+      if (ch === CH.getStatus && n++ < 2) {
+        await orig(ch, ...args)
+        return { ...STATUS, engine: 'starting' as const, attachedPid: null }
+      }
+      return orig(ch, ...args)
+    }
+    const r = await createApi(ipc, stereo).attach('canary')
+    expect(r.pid).toBe(4242)
+    expect(ipc.calls.filter((c) => c.ch === CH.getStatus).length).toBe(3)
   })
 
   it('listBuilds は今寄生しているビルドだけを返す', async () => {

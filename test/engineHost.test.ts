@@ -26,7 +26,10 @@ class FakeStream implements StreamLike {
   }
 }
 
+let procSeq = 0
+
 class FakeProc implements EngineProcessLike {
+  readonly pid = 1000 + ++procSeq
   sent: unknown[] = []
   killed = false
   readonly stdout = new FakeStream()
@@ -126,6 +129,15 @@ describe('createEngineHost', () => {
     h.host.start()
     expect(h.procs).toHaveLength(1)
     expect(h.states[0]).toEqual({ state: 'starting', pid: null, error: null })
+  })
+
+  it('子プロセスの PID を持つ（実機でエンジンだけを落として復帰を確かめられる）', () => {
+    const h = harness()
+    expect(h.host.pid()).toBeNull()
+    h.host.start()
+    expect(h.host.pid()).toBe(h.procs[0]?.pid)
+    h.procs[0]?.exit(1)
+    expect(h.host.pid()).toBeNull()
   })
 
   it('子からの state をそのまま状態に反映する', () => {

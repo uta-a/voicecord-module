@@ -67,6 +67,12 @@ export interface VoiceCordStatus {
   engine: EngineState
   /** attach 先の audio utility プロセス */
   attachedPid: number | null
+  /**
+   * エンジン自身（utilityProcess の子）の PID。
+   * 実機で「どのプロセスがエンジンか」を判別する手段がこれしか無い。
+   * Discord 自身も node.mojom.NodeService を持っていて、コマンドラインでは区別できない。
+   */
+  enginePid: number | null
   discordBuild: string
   discordVersion: string
   /** engine が failed のときの理由。UI にそのまま出す */

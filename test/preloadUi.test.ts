@@ -17,6 +17,7 @@ import { CH, type VoiceCordStatus } from '../src/shared/ipc.js'
 const STATUS: VoiceCordStatus = {
   engine: 'searching',
   attachedPid: null,
+  enginePid: null,
   discordBuild: 'canary',
   discordVersion: '1.0.1099',
   lastError: null,

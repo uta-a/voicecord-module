@@ -53,6 +53,7 @@ describe('UI のマウント', () => {
     shell.setStatus({
       engine: 'attached',
       attachedPid: 4242,
+      enginePid: null,
       discordBuild: 'canary',
       discordVersion: '1.0.1158',
       lastError: null,

@@ -15,6 +15,8 @@ import type { EngineState, VoiceCordEvent } from '../shared/ipc.js'
 
 /** utilityProcess のうち、ここで使うものだけ */
 export interface EngineProcessLike {
+  /** 子プロセスの PID。まだ起きていなければ undefined */
+  readonly pid?: number | undefined
   postMessage(message: unknown, transfer?: unknown[]): void
   kill(): boolean
   on(event: 'message', listener: (message: unknown) => void): void
@@ -52,6 +54,8 @@ export interface EngineHost {
   request(ch: string, args: unknown[], transfer?: unknown[]): Promise<unknown>
   /** 現在のエンジンの生死 */
   state(): EngineState
+  /** 今動いている子プロセスの PID。居なければ null */
+  pid(): number | null
 }
 
 /**
@@ -234,7 +238,9 @@ export function createEngineHost(deps: EngineHostDeps): EngineHost {
         }
       }),
 
-    state: () => engineState
+    state: () => engineState,
+
+    pid: () => child?.pid ?? null
   }
 }
 

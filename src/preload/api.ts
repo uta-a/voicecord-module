@@ -25,6 +25,10 @@ import { createOfflineDecoder, decodeToMono, type AudioDecoder } from './decode.
  * store.ts の `getPcm` の呼び口は無改造のまま使える。
  */
 
+/** attach の結果が落ち着くまで待つ回数と間隔（合計 3 秒） */
+export const ATTACH_SETTLE_TRIES = 20
+export const ATTACH_SETTLE_INTERVAL_MS = 150
+
 export interface IpcRendererLike {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
   on(channel: string, listener: (event: unknown, ...args: unknown[]) => void): void
@@ -76,9 +80,22 @@ export function createApi(ipc: IpcRendererLike, decode: AudioDecoder = createOff
       return [s.discordBuild as BuildKey]
     },
 
-    // 引数のビルドは無視する。attach は自動なので、これは手動リトライ
+    /**
+     * 引数のビルドは無視する（自分がどこに寄生しているかは自明）。
+     *
+     * attach は自動なので、ここは原則「今の状態を読む」だけにする。
+     * 無条件に再起動すると、Ctrl+R のたびにエンジンが死んで起き直すことになり、
+     * M3 では frida の attach ごと落ちて数秒鳴らせなくなる。
+     * 壊れているときだけ起こし直す。
+     */
     attach: async (): Promise<AttachResult> => {
-      const s = await call<VoiceCordStatus>(CH.reattach)
+      let s = await call<VoiceCordStatus>(CH.getStatus)
+      if (s.engine === 'failed') s = await call<VoiceCordStatus>(CH.reattach)
+      // starting のまま返すと PID が null で「見つからず」に見える。落ち着くまで待つ
+      for (let i = 0; i < ATTACH_SETTLE_TRIES && s.engine === 'starting'; i++) {
+        await new Promise((r) => setTimeout(r, ATTACH_SETTLE_INTERVAL_MS))
+        s = await call<VoiceCordStatus>(CH.getStatus)
+      }
       return {
         ok: s.engine !== 'failed',
         pid: s.attachedPid,
