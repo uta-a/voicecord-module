@@ -14,11 +14,11 @@ import { validateVoice } from '@/lib/calibration'
 import { mockApi } from '@/mockApi'
 import { gatedRms } from '@shared/loudness'
 
-// M1 にはエンジンが無いのでモックを噛ませる(M3 で実体に差し替える)。
-// preload の window.api は patcher と話すための別物なので、ここからは見に行かない。
-// undefined を取りうる型のままにしてあるのは、エンジンが載る側でも「繋がっていない」
-// 経路が必要になるため(store 側の !api 分岐を消さない)。
-export const engineApi: Api | undefined = mockApi
+// preload が isolated world に置く窓口。Discord の中ではこれが実体で、
+// patcher 経由で engine(utilityProcess の子)まで繋がる。
+// 素のブラウザ(テストや単体表示)では居ないのでモックへ落ちる。
+// undefined を取りうる型のままにしてあるのは、store 側の !api 分岐を消さないため。
+export const engineApi: Api | undefined = (globalThis as { api?: Api }).api ?? mockApi
 const api = engineApi
 
 // 試聴/サイドトーンのローカル出力(Web Audio)。VC には流れない。
