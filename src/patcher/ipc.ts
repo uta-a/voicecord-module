@@ -1,4 +1,4 @@
-import { CH, type EngineEvent, type VoiceCordStatus } from '../shared/ipc.js'
+import { CH, type VoiceCordEvent, type VoiceCordStatus } from '../shared/ipc.js'
 
 /**
  * ipcMain 側の骨格。
@@ -44,7 +44,7 @@ export class Subscribers {
     return this.set.size
   }
 
-  broadcast(payload: EngineEvent): void {
+  broadcast(payload: VoiceCordEvent): void {
     for (const wc of [...this.set]) {
       if (wc.isDestroyed()) {
         this.set.delete(wc)

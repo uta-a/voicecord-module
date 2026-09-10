@@ -5,6 +5,8 @@
  * 使うので衝突しない。文字列を直書きせずここに集約し、両側で同じ定数を使う。
  */
 
+import type { EngineEvent as RawEngineEvent } from './types.js'
+
 export const CH = {
   /** 設定の読み書き */
   getConfig: 'voicecord:getConfig',
@@ -73,7 +75,15 @@ export interface VoiceCordStatus {
   degraded: Array<{ name: string; error: string }>
 }
 
-/** main → renderer のイベント。M1 では状態変化だけを流す */
-export type EngineEvent =
+/**
+ * main → renderer のイベント。
+ *
+ * エンジン由来のイベント（vc / gate / calib / voiceEnded / detached など）は
+ * 形を engine 側が決めるので、`engine` で包んで素の形のまま運ぶ。
+ * 包まずに union へ混ぜると、`{ ev: string }` の catch-all が status / log の
+ * 判別を潰してしまう。
+ */
+export type VoiceCordEvent =
   | { ev: 'status'; status: VoiceCordStatus }
   | { ev: 'log'; level: 'info' | 'warn' | 'error'; message: string }
+  | { ev: 'engine'; payload: RawEngineEvent }

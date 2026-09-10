@@ -1,4 +1,4 @@
-import { CH, type EngineEvent, type VoiceCordStatus } from '../shared/ipc.js'
+import { CH, type VoiceCordEvent, type VoiceCordStatus } from '../shared/ipc.js'
 
 /**
  * renderer 側の窓口。
@@ -19,7 +19,7 @@ export interface VoiceCordApi {
   /** 購読を始めて、その時点の状態を受け取る */
   subscribe(): Promise<VoiceCordStatus>
   /** 戻り値を呼ぶと購読を解除する */
-  onEvent(cb: (e: EngineEvent) => void): () => void
+  onEvent(cb: (e: VoiceCordEvent) => void): () => void
 }
 
 export function createApi(ipc: IpcRendererLike): VoiceCordApi {
@@ -29,7 +29,7 @@ export function createApi(ipc: IpcRendererLike): VoiceCordApi {
     onEvent: (cb) => {
       const listener = (_e: unknown, ...args: unknown[]): void => {
         const payload = args[0]
-        if (isEngineEvent(payload)) cb(payload)
+        if (isVoiceCordEvent(payload)) cb(payload)
       }
       ipc.on(CH.event, listener)
       return () => ipc.removeListener(CH.event, listener)
@@ -38,8 +38,8 @@ export function createApi(ipc: IpcRendererLike): VoiceCordApi {
 }
 
 /** main から来た値を素通しせず、形を確かめてから UI に渡す */
-export function isEngineEvent(v: unknown): v is EngineEvent {
+export function isVoiceCordEvent(v: unknown): v is VoiceCordEvent {
   if (typeof v !== 'object' || v === null) return false
   const ev = (v as { ev?: unknown }).ev
-  return ev === 'status' || ev === 'log'
+  return ev === 'status' || ev === 'log' || ev === 'engine'
 }

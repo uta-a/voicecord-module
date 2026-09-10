@@ -11,7 +11,7 @@ import {
 import { portalContainer } from '../src/ui/portal.js'
 import { containKeyboard, DEFAULT_HOTKEY, matchesHotkey } from '../src/preload/keyboard.js'
 import { injectStyles, type DocumentLike } from '../src/preload/styles.js'
-import { createApi, isEngineEvent, type IpcRendererLike } from '../src/preload/api.js'
+import { createApi, isVoiceCordEvent, type IpcRendererLike } from '../src/preload/api.js'
 import { CH, type VoiceCordStatus } from '../src/shared/ipc.js'
 
 const STATUS: VoiceCordStatus = {
@@ -307,12 +307,12 @@ describe('createApi', () => {
   })
 })
 
-describe('isEngineEvent', () => {
+describe('isVoiceCordEvent', () => {
   it('status と log だけを通す', () => {
-    expect(isEngineEvent({ ev: 'status', status: STATUS })).toBe(true)
-    expect(isEngineEvent({ ev: 'log', level: 'info', message: 'x' })).toBe(true)
-    expect(isEngineEvent({ ev: 'other' })).toBe(false)
-    expect(isEngineEvent(undefined)).toBe(false)
+    expect(isVoiceCordEvent({ ev: 'status', status: STATUS })).toBe(true)
+    expect(isVoiceCordEvent({ ev: 'log', level: 'info', message: 'x' })).toBe(true)
+    expect(isVoiceCordEvent({ ev: 'other' })).toBe(false)
+    expect(isVoiceCordEvent(undefined)).toBe(false)
   })
 })
 

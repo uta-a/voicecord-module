@@ -73,6 +73,33 @@ const targets = [
 ]
 
 /**
+ * エンジン。utilityProcess.fork の子として Node のモジュールローダに読まれるので
+ * ESM のまま出す。frida は packages:'external' で import 文のまま残す
+ * （バンドルに巻き込むと bindings が module_root を辿れなくなる）。
+ *
+ * M2 の実体はスタブ。M3 で src/engine/engine.mjs に差し替える。
+ */
+async function buildEngine() {
+  const entry = fs.existsSync(path.join(root, 'src/engine/engine.mjs'))
+    ? 'src/engine/engine.mjs'
+    : 'src/engine/stub.mjs'
+  const outfile = path.join(outDir, 'engine.mjs')
+  await build({
+    bundle: true,
+    platform: 'node',
+    target: 'node20',
+    format: 'esm',
+    packages: 'external',
+    sourcemap: true,
+    logLevel: 'info',
+    entryPoints: [path.join(root, entry)],
+    outfile
+  })
+  console.log(`built: engine.mjs (${entry})`)
+  return { name: 'engine', file: outfile }
+}
+
+/**
  * 出力に eval / new Function が混ざっていないか検査する。
  *
  * UI は preload の isolated world で動くので CSP とは無縁だが、
@@ -152,6 +179,7 @@ async function main() {
   await buildManager()
 
   const built = []
+  if (fs.existsSync(path.join(root, 'src/engine'))) built.push(await buildEngine())
   for (const t of targets) {
     if (!fs.existsSync(path.join(root, t.entry))) {
       console.log(`skip ${t.name}（${t.entry} がまだ無い）`)
