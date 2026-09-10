@@ -1,12 +1,20 @@
-import { app, ipcMain, session } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, session, utilityProcess } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import {
+  createConfigStore,
+  defaultConfig,
+  defaultSoundsFolder,
+  type ConfigStore
+} from '../shared/config.js'
 import { CH, type VoiceCordStatus } from '../shared/ipc.js'
 import { voiceCordPathsFromEnv } from '../shared/paths.js'
 import { markPatcherRun, readState, writeState } from '../shared/stateStore.js'
-import { makeNotImplemented, registerIpc, Subscribers } from './ipc.js'
+import { createEngineHost, type EngineHost, type EngineProcessLike } from './engineHost.js'
+import { registerIpc, Subscribers } from './ipc.js'
 import { guessBranch, locateInstall } from './locate.js'
 import { registerPreload } from './preloadReg.js'
+import { resolveSoundPath, scanFolder, type SoundsFs } from './soundsFs.js'
 import { runSubsystems, summarize, type Subsystem, type SubsystemLog } from './subsystems.js'
 
 /**
@@ -18,11 +26,25 @@ import { runSubsystems, summarize, type Subsystem, type SubsystemLog } from './s
  * どのサブシステムが落ちても Discord は通常どおり起動しなければならない。
  * 特に UI（preload 登録）とエンジンは独立させ、エンジンが死んでいても
  * FAB は出て理由が読める状態を保つ。
+ *
+ * frida はここには載せない。エンジンは utilityProcess の子として起こす。
  */
 
 const log: SubsystemLog = {
   info: (msg) => console.log(msg),
   error: (msg, err) => console.error(msg, err)
+}
+
+/** soundsFs へ渡す node の fs。統計は ns 精度のものを別口で取る */
+const soundsFs: SoundsFs = {
+  existsSync: (p) => fs.existsSync(p),
+  statSync: (p) => fs.statSync(p),
+  statSyncBig: (p) => {
+    const st = fs.statSync(p, { bigint: true })
+    return { mtimeNs: st.mtimeNs, size: st.size }
+  },
+  readdirSync: (p) => fs.readdirSync(p),
+  realpathSync: (p) => fs.realpathSync(p)
 }
 
 function main(): void {
@@ -31,13 +53,26 @@ function main(): void {
 
   const subscribers = new Subscribers()
   const status: VoiceCordStatus = {
-    // M1 ではエンジンがまだ無い。存在しないものを attached とは言わない
     engine: 'starting',
     attachedPid: null,
     discordBuild: install ? guessBranch(install.resourcesDir) : 'unknown',
     discordVersion: install?.version ?? 'unknown',
     lastError: null,
     degraded: []
+  }
+  const broadcastStatus = (): void => subscribers.broadcast({ ev: 'status', status })
+
+  let config: ConfigStore | null = null
+  let engine: EngineHost | null = null
+
+  /** サブシステムが落ちていたら、その旨を UI へ返す（無言で undefined を返さない） */
+  const needConfig = (): ConfigStore => {
+    if (config === null) throw new Error('設定を読み込めていません')
+    return config
+  }
+  const needEngine = (): EngineHost => {
+    if (engine === null) throw new Error('エンジンが起動していません')
+    return engine
   }
 
   const subsystems: Subsystem[] = [
@@ -57,12 +92,90 @@ function main(): void {
       }
     },
     {
+      name: 'config',
+      run: () => {
+        const home = process.env['USERPROFILE'] ?? app.getPath('home')
+        const dfltFolder = defaultSoundsFolder(home, path.join)
+        config = createConfigStore(fs, paths, defaultConfig(dfltFolder), path.dirname)
+        // 既定のフォルダだけは自動で作る。VC に参加中しか UI が出ない構成なので、
+        // 初回に「フォルダを選んでください」と言う場所が無い。
+        // ユーザーが自分で指定したフォルダは勝手に作らない（打ち間違いを隠さない）
+        if (config.get().folder === dfltFolder && !fs.existsSync(dfltFolder)) {
+          fs.mkdirSync(dfltFolder, { recursive: true })
+        }
+      }
+    },
+    {
+      // frida はこの子の中だけ。ネイティブが落ちても Discord は生き残る
+      name: 'engine',
+      run: () => {
+        if (!fs.existsSync(paths.engine)) {
+          throw new Error(`エンジンが見つかりません: ${paths.engine}`)
+        }
+        const host = createEngineHost({
+          fork: () =>
+            utilityProcess.fork(paths.engine, [], {
+              stdio: 'pipe',
+              serviceName: 'VoiceCord engine'
+            }) as unknown as EngineProcessLike,
+          emit: (e) => subscribers.broadcast(e),
+          onState: (state, attachedPid, error) => {
+            status.engine = state
+            status.attachedPid = attachedPid
+            status.lastError = error
+            broadcastStatus()
+          },
+          setTimer: (fn, ms) => setTimeout(fn, ms),
+          clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
+          now: () => Date.now()
+        })
+        engine = host
+        // utilityProcess は app が ready になるまで使えない
+        if (app.isReady()) host.start()
+        else void app.whenReady().then(() => host.start())
+        // 終了は投げっぱなし（判断 H）。preventDefault はしない。
+        // 子側は parentPort の close でゲートを戻す（ゲート復帰 4 層の 1 層目）
+        app.on('before-quit', () => host.stop())
+      }
+    },
+    {
       name: 'ipc',
       run: () => {
         registerIpc(ipcMain, {
           subscribers,
           getStatus: () => status,
-          notImplemented: makeNotImplemented('M2')
+          config: {
+            get: () => needConfig().get(),
+            save: (partial) => needConfig().save(partial),
+            get loadWarning() {
+              return config?.loadWarning ?? null
+            }
+          },
+          sounds: {
+            scan: (folder) => scanFolder(soundsFs, folder),
+            read: (folder, requested) => {
+              const r = resolveSoundPath(soundsFs, folder, requested)
+              if (!r.ok) throw new Error(r.error)
+              const buf = fs.readFileSync(r.path)
+              // Buffer の backing store をそのまま渡すと、隣接する別データまで
+              // 見せてしまう。切り出してから渡す
+              return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+            }
+          },
+          chooseFolder: async () => {
+            // Discord の窓を親にする。親を付けないとダイアログが後ろへ回り込み、
+            // 「押しても何も起きない」ように見える
+            const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+            const opts = { properties: ['openDirectory' as const] }
+            const r = parent
+              ? await dialog.showOpenDialog(parent, opts)
+              : await dialog.showOpenDialog(opts)
+            return r.canceled ? null : (r.filePaths[0] ?? null)
+          },
+          engine: {
+            request: (ch, args) => needEngine().request(ch, args),
+            restart: () => needEngine().restart()
+          }
         })
       }
     },
@@ -90,11 +203,14 @@ function main(): void {
   const outcomes = runSubsystems(subsystems, log)
   const { failures } = summarize(outcomes)
   status.degraded = failures
-  if (failures.length > 0) {
+  // エンジンが起動できなかったときだけ engine を failed にする。
+  // 他のサブシステムの失敗は degraded で伝える（エンジンは生きているのに
+  // 赤く光ると、どこが壊れているのか読み取れなくなる）
+  if (failures.some((f) => f.name === 'engine')) {
     status.engine = 'failed'
-    status.lastError = failures.map((f) => `${f.name}: ${f.error}`).join(' / ')
+    status.lastError = failures.find((f) => f.name === 'engine')?.error ?? null
   }
-  subscribers.broadcast({ ev: 'status', status })
+  broadcastStatus()
 }
 
 // 入口そのものが throw しても Discord を巻き添えにしない。

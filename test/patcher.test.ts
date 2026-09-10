@@ -2,14 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { runSubsystems, summarize, type SubsystemLog } from '../src/patcher/subsystems.js'
 import { PRELOAD_ID, registerPreload, type SessionLike } from '../src/patcher/preloadReg.js'
 import {
-  makeNotImplemented,
   registerIpc,
   Subscribers,
+  type IpcDeps,
   type IpcMainLike,
   type WebContentsLike
 } from '../src/patcher/ipc.js'
-import { CH } from '../src/shared/ipc.js'
+import { CH, INVOKE_CHANNELS } from '../src/shared/ipc.js'
 import type { VoiceCordStatus } from '../src/shared/ipc.js'
+import { defaultConfig } from '../src/shared/config.js'
+import type { AppConfig, LoadedConfig, SoundItem } from '../src/shared/types.js'
 
 const quietLog = (): SubsystemLog => ({ info: vi.fn(), error: vi.fn() })
 
@@ -202,6 +204,8 @@ function fakeIpcMain(): IpcMainLike & { handlers: Map<string, Function>; removed
   }
 }
 
+const CONFIG: AppConfig = defaultConfig('C:/sounds')
+
 const STATUS: VoiceCordStatus = {
   engine: 'starting',
   attachedPid: null,
@@ -211,50 +215,178 @@ const STATUS: VoiceCordStatus = {
   degraded: []
 }
 
+/** registerIpc の依存。既定は「全部成功する」。個別のテストで差し替える */
+function deps(over: Partial<IpcDeps> = {}): IpcDeps & {
+  saved: Array<Partial<AppConfig>>
+  engineCalls: Array<{ ch: string; args: unknown[] }>
+  restarts: unknown[]
+} {
+  const saved: Array<Partial<AppConfig>> = []
+  const engineCalls: Array<{ ch: string; args: unknown[] }> = []
+  const restarts: unknown[] = []
+  const base: IpcDeps = {
+    subscribers: new Subscribers(),
+    getStatus: () => STATUS,
+    config: {
+      get: () => CONFIG,
+      save: (partial) => {
+        saved.push(partial)
+        return { ok: true }
+      },
+      loadWarning: null
+    },
+    sounds: {
+      scan: (folder) => [{ id: folder, name: `${folder}.wav`, path: folder, fp: '1_2' }],
+      read: () => new ArrayBuffer(8)
+    },
+    chooseFolder: async () => 'C:/picked',
+    engine: {
+      request: async (ch, args) => {
+        engineCalls.push({ ch, args })
+        return `res:${ch}`
+      },
+      restart: () => void restarts.push(1)
+    }
+  }
+  const merged = { ...base, ...over } as IpcDeps
+  return Object.assign(merged, { saved, engineCalls, restarts }) as never
+}
+
 describe('registerIpc', () => {
   it('全チャンネルを登録する', () => {
     const ipc = fakeIpcMain()
-    registerIpc(ipc, {
-      subscribers: new Subscribers(),
-      getStatus: () => STATUS,
-      notImplemented: makeNotImplemented('M2')
-    })
+    registerIpc(ipc, deps())
     // event は push 専用なので handle しない
     expect(ipc.handlers.has(CH.event)).toBe(false)
-    expect(ipc.handlers.has(CH.getStatus)).toBe(true)
-    expect(ipc.handlers.has(CH.subscribe)).toBe(true)
-    expect(ipc.handlers.has(CH.play)).toBe(true)
+    for (const ch of INVOKE_CHANNELS) expect(ipc.handlers.has(ch)).toBe(true)
   })
 
   it('二重登録で落ちない（開発中の読み直しに耐える）', () => {
     const ipc = fakeIpcMain()
-    const deps = {
-      subscribers: new Subscribers(),
-      getStatus: () => STATUS,
-      notImplemented: makeNotImplemented('M2')
-    }
-    registerIpc(ipc, deps)
-    expect(() => registerIpc(ipc, deps)).not.toThrow()
+    const d = deps()
+    registerIpc(ipc, d)
+    expect(() => registerIpc(ipc, d)).not.toThrow()
   })
 
   it('subscribe は購読者に足して現在の状態を返す', () => {
     const ipc = fakeIpcMain()
-    const subs = new Subscribers()
-    registerIpc(ipc, { subscribers: subs, getStatus: () => STATUS, notImplemented: makeNotImplemented('M2') })
-    const wc = fakeWc()
-    const got = ipc.handlers.get(CH.subscribe)!({ sender: wc })
+    const d = deps()
+    registerIpc(ipc, d)
+    const got = ipc.handlers.get(CH.subscribe)!({ sender: fakeWc() })
     expect(got).toEqual(STATUS)
-    expect(subs.size).toBe(1)
+    expect(d.subscribers.size).toBe(1)
   })
 
-  it('未実装チャンネルは無言で undefined を返さず、理由つきで断る', () => {
+  it('getConfig は読み込み時の警告を一緒に返す（無言で既定値にしない）', () => {
     const ipc = fakeIpcMain()
-    registerIpc(ipc, {
-      subscribers: new Subscribers(),
-      getStatus: () => STATUS,
-      notImplemented: makeNotImplemented('M2')
-    })
-    expect(() => ipc.handlers.get(CH.play)!({ sender: fakeWc() })).toThrow(/M2 で実装予定/)
+    const d = deps()
+    ;(d.config as { loadWarning: string | null }).loadWarning = '以前の設定を引き継ぎました'
+    registerIpc(ipc, d)
+    const got = ipc.handlers.get(CH.getConfig)!({ sender: fakeWc() }) as LoadedConfig
+    expect(got.folder).toBe(CONFIG.folder)
+    expect(got.loadWarning).toBe('以前の設定を引き継ぎました')
+  })
+
+  it('saveConfig は部分更新を渡す', () => {
+    const ipc = fakeIpcMain()
+    const d = deps()
+    registerIpc(ipc, d)
+    ipc.handlers.get(CH.saveConfig)!({ sender: fakeWc() }, { master: 2 })
+    expect(d.saved).toEqual([{ master: 2 }])
+  })
+
+  it('saveConfig は形が違えば断る', () => {
+    const ipc = fakeIpcMain()
+    registerIpc(ipc, deps())
+    expect(() => ipc.handlers.get(CH.saveConfig)!({ sender: fakeWc() }, [1])).toThrow(/形が想定/)
+    expect(() => ipc.handlers.get(CH.saveConfig)!({ sender: fakeWc() }, null)).toThrow(/形が想定/)
+  })
+
+  it('保存に失敗したら黙らせない（次の起動で消えることを伝える）', () => {
+    const ipc = fakeIpcMain()
+    registerIpc(
+      ipc,
+      deps({
+        config: { get: () => CONFIG, save: () => ({ ok: false, error: 'EACCES' }), loadWarning: null }
+      })
+    )
+    expect(() => ipc.handlers.get(CH.saveConfig)!({ sender: fakeWc() }, { master: 2 })).toThrow(
+      /保存できませんでした: EACCES/
+    )
+  })
+
+  it('scanFolder は引数が無ければ設定中のフォルダを見る', () => {
+    const ipc = fakeIpcMain()
+    registerIpc(ipc, deps())
+    const withArg = ipc.handlers.get(CH.scanFolder)!({ sender: fakeWc() }, 'C:/other')
+    const noArg = ipc.handlers.get(CH.scanFolder)!({ sender: fakeWc() })
+    expect((withArg as SoundItem[])[0]?.id).toBe('C:/other')
+    expect((noArg as SoundItem[])[0]?.id).toBe(CONFIG.folder)
+  })
+
+  it('readSoundFile は設定中のフォルダを基準に検証させる', () => {
+    const ipc = fakeIpcMain()
+    const seen: Array<[string, string]> = []
+    registerIpc(
+      ipc,
+      deps({
+        sounds: {
+          scan: () => [],
+          read: (folder, requested) => {
+            seen.push([folder, requested])
+            return new ArrayBuffer(4)
+          }
+        }
+      })
+    )
+    ipc.handlers.get(CH.readSoundFile)!({ sender: fakeWc() }, 'a.wav')
+    expect(seen).toEqual([[CONFIG.folder, 'a.wav']])
+  })
+
+  it('readSoundFile は文字列でない指定を断る', () => {
+    const ipc = fakeIpcMain()
+    registerIpc(ipc, deps())
+    expect(() => ipc.handlers.get(CH.readSoundFile)!({ sender: fakeWc() }, 42)).toThrow(
+      /パスが指定されていません/
+    )
+  })
+
+  it('エンジン担当のチャンネルはそのまま転送する', async () => {
+    const ipc = fakeIpcMain()
+    const d = deps()
+    registerIpc(ipc, d)
+    await ipc.handlers.get(CH.play)!({ sender: fakeWc() }, { srcId: 'a' })
+    await ipc.handlers.get(CH.stopAll)!({ sender: fakeWc() })
+    expect(d.engineCalls).toEqual([
+      { ch: CH.play, args: [{ srcId: 'a' }] },
+      { ch: CH.stopAll, args: [] }
+    ])
+  })
+
+  it('reattach は転送ではなくエンジンの起こし直し', () => {
+    const ipc = fakeIpcMain()
+    const d = deps()
+    registerIpc(ipc, d)
+    expect(ipc.handlers.get(CH.reattach)!({ sender: fakeWc() })).toEqual(STATUS)
+    expect(d.restarts).toHaveLength(1)
+    expect(d.engineCalls).toEqual([])
+  })
+
+  it('エンジンが死んでいても設定は読める（音は鳴らないが理由は読める）', () => {
+    const ipc = fakeIpcMain()
+    registerIpc(
+      ipc,
+      deps({
+        engine: {
+          request: () => Promise.reject(new Error('エンジンが動いていません')),
+          restart: () => {
+            throw new Error('エンジンが起動していません')
+          }
+        }
+      })
+    )
+    expect(() => ipc.handlers.get(CH.getConfig)!({ sender: fakeWc() })).not.toThrow()
+    expect(() => ipc.handlers.get(CH.reattach)!({ sender: fakeWc() })).toThrow(/起動していません/)
   })
 })
 
