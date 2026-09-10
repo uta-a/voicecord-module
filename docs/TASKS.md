@@ -101,7 +101,7 @@ CDP（`--remote-debugging-port`）で機械的に確認した。Canary 1.0.1158�
 
 ### M2-a config
 - [x] 読み書きと sanitize（`shared/config.ts`）。BOM / .broken 退避 / tmp→rename
-- [x] 旧 `%APPDATA%oicecord\config.json` からの一度きり・非破壊な移行
+- [x] 旧 `%APPDATA%\voicecord\config.json` からの一度きり・非破壊な移行
 - [x] 既定の音源フォルダ `%USERPROFILE%\Documents\VoiceCord\sounds` を自動作成
 
 ### M2-b エンジンの監督
