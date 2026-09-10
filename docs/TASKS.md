@@ -101,3 +101,48 @@ CDP（`--remote-debugging-port`）で機械的に確認した。Canary 1.0.1158�
 
 計画ファイル参照。M2 = IPC 疎通（エンジンはフェイク）、M3 = 実エンジン、
 M4 = ffmpeg 廃止、M5 = 堅牢化、M6 = マネージャ仕上げ、M7 = Stable 受け入れ。
+
+## M4.5 — Discord ネイティブ意匠への UI 作り替え
+
+着手は **M4（ffmpeg 廃止）の完了後**。M1-e で移植した shadcn パネルは捨て、
+純正サウンドボードと見分けのつかないボタン + ポップアウトに作り替える。
+計画ファイルの「M4.5」節が正。
+
+### M4.5-a 実測（Canary を `--remote-debugging-port` 付きで起動して CDP から採る）
+- [ ] `webContents.executeJavaScript` がメインワールドで動き CSP に阻まれないか
+      → 否なら採取役ごと削り、発見連鎖の 2 段目以降で運用する
+- [ ] `webpackChunkdiscord_app` への push が通るか
+- [ ] サウンドボードボタンの DOM 位置・`aria-label` の実文言・親コンテナ
+- [ ] 純正ポップアウトの寸法・余白・角丸・影・タイルのサイズと段組み
+- [ ] Discord のテーマ変数の実名（`--background-primary` 系か新しい系か）とライト/ダークの値
+
+### M4.5-b メインワールドの採取役（`src/mainworld/harvest.ts`）
+- [ ] 読み取り専用。`window.api` も IPC も渡さない
+- [ ] patcher から `did-finish-load` で投入。iframe を除外
+- [ ] 受け渡しは `window.postMessage` か CustomEvent（素の文字列のみ）
+
+### M4.5-c アンカー発見の 5 段フォールバック（`src/preload/anchor.ts`）
+- [ ] 1 採取役のクラス名 / 2 `aria-label` / 3 SVG の `d` / 4 コンテナ内の位置 / 5 FAB
+- [ ] 何段目で見つかったかを状態に持つ
+- [ ] 2 段目以下に落ちたら「次の更新で壊れうる」を 1 回警告
+
+### M4.5-d 接ぎ木と再挿入（`src/preload/graft.ts`）
+- [ ] アンカーの `className` をコピー。アイコンだけ差し替え
+- [ ] `MutationObserver` で消えたら再挿入
+- [ ] **自己トリガのループを断つ + 再挿入頻度に上限**（抜くと Discord ごと固まる）
+
+### M4.5-e ポップアウト（`src/ui` 全面改装）
+- [ ] Radix Popover を接ぎ木ボタンにアンカー、描画先は `#vc-root .vc-portal`
+- [ ] メイン（グリッド + 全体音量）／歯車から設定（送信・モニター・入場サウンド）
+- [ ] キャリブレーションと入場サウンドは Discord のモーダル意匠で中央ダイアログ
+
+### M4.5-f テーマ追従
+- [ ] `tailwind.config.js` の `colors` を `hsl(var(--x))` → `var(--vc-x)`
+- [ ] `index.css` の HSL 三つ組を Discord 変数参照へ。**全てにフォールバック値**
+- [ ] `SHELL_CSS` の直書き色も変数へ。`color-scheme: dark` の固定を外す
+- [ ] `#vc-root` スコープ装置と `test/uiCss.test.ts` は維持
+
+### M4.5-g 後始末
+- [ ] `SoundItem` に `kind: 'file'` を足す（将来の Discord 音源注入の余地）
+- [ ] `shell.ts` のパネル枠とホットキー開閉を削除。FAB は故障時フォールバックとして残す
+- [ ] 音源フォルダの既定パスを自動作成（VC 外では UI が出ないため）
