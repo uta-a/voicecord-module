@@ -109,22 +109,35 @@ M4 = ffmpeg 廃止、M5 = 堅牢化、M6 = マネージャ仕上げ、M7 = Stabl
 計画ファイルの「M4.5」節が正。
 
 ### M4.5-a 実測（Canary を `--remote-debugging-port` 付きで起動して CDP から採る）
-- [ ] `webContents.executeJavaScript` がメインワールドで動き CSP に阻まれないか
-      → 否なら採取役ごと削り、発見連鎖の 2 段目以降で運用する
-- [ ] `webpackChunkdiscord_app` への push が通るか
+- [ ] preload の `webFrame.executeJavaScript` が実 CSP 下で通るか
+      ※ ワールドは Electron v42.11.2 のソースで確定済み（`kMainWorldId` を明示的に渡す）。
+        CSP をすり抜ける点は公式の明文が無いが、Vencord が Stable で現に動いているのが実証。
+      → 否なら `webContents.debugger` の `Page.addScriptToEvaluateOnNewDocument`、
+        それも駄目なら採取役ごと削り、発見連鎖の 2 段目以降で運用する
+- [ ] `webpackChunkdiscord_app.push` で `__webpack_require__` を受け取れるか
 - [ ] サウンドボードボタンの DOM 位置・`aria-label` の実文言・親コンテナ
+- [ ] `expression-picker-chat-input-button` が実際に付いているか
 - [ ] 純正ポップアウトの寸法・余白・角丸・影・タイルのサイズと段組み
 - [ ] Discord のテーマ変数の実名（`--background-primary` 系か新しい系か）とライト/ダークの値
 
 ### M4.5-b メインワールドの採取役（`src/mainworld/harvest.ts`）
 - [ ] 読み取り専用。`window.api` も IPC も渡さない
-- [ ] patcher から `did-finish-load` で投入。iframe を除外
+- [ ] **preload の `webFrame.executeJavaScript` で投入**（Vencord と同じ経路）。
+      別バンドル `payload/harvest.js` にして preload が文字列で読む
+- [ ] **`Function.prototype` には絶対に触らない。** Vencord は `"m"` を
+      `configurable:false` で定義しているので、同じ手を使うと後発が TypeError で落ちる
+- [ ] `window.Vencord?.Webpack` が居れば借りる。居なければ
+      `webpackChunkdiscord_app.push` で `__webpack_require__` を取る
+- [ ] 採取役の中で `eval` / `new Function` を使わない（メインワールドなので CSP の
+      `unsafe-eval` 制限を通常どおり受ける）
 - [ ] 受け渡しは `window.postMessage` か CustomEvent（素の文字列のみ）
 
 ### M4.5-c アンカー発見の 5 段フォールバック（`src/preload/anchor.ts`）
-- [ ] 1 採取役のクラス名 / 2 `aria-label` / 3 SVG の `d` / 4 コンテナ内の位置 / 5 FAB
+- [ ] 1 採取役の CSS モジュールのクラス名 / 2 リテラルの
+      `expression-picker-chat-input-button` / 3 `aria-label` / 4 SVG の `d` か位置 / 5 FAB
 - [ ] 何段目で見つかったかを状態に持つ
 - [ ] 2 段目以下に落ちたら「次の更新で壊れうる」を 1 回警告
+- [ ] 見つからないときに throw しない（Vencord の作法）。ただし握りつぶさず段位を出す
 
 ### M4.5-d 接ぎ木と再挿入（`src/preload/graft.ts`）
 - [ ] アンカーの `className` をコピー。アイコンだけ差し替え
