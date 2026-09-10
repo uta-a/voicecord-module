@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { voiceCordPathsFromEnv } from '../../shared/paths.js'
 import { tasklistCommand } from '../patch/running.js'
+import { resolvePayloadDir } from '../payloadDir.js'
 import { applyTo, listInstalls, unpatchFrom, type ServiceDeps, type ServiceFs } from '../service.js'
 
 /**
@@ -23,9 +24,10 @@ const MCH = {
 } as const
 
 function payloadDir(): string {
-  // 配布時は resources/payload、開発時はリポジトリ直下の payload
-  if (app.isPackaged) return path.join(process.resourcesPath, 'payload')
-  return path.join(app.getAppPath(), 'payload')
+  return resolvePayloadDir(
+    { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, mainDir: __dirname },
+    path.join
+  )
 }
 
 function makeDeps(): ServiceDeps {
