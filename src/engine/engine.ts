@@ -55,14 +55,23 @@ let core: EngineCore | null = null
 let supervisor: Supervisor | null = null
 
 /**
- * レートの測り直し。
+ * レートの追随。
  *
- * krisp がロードされた瞬間に検査すると、まだ 1 フレームも処理しておらず
- * 0 回で返る。一度きりの計測にすると、その場合レートが永久に不明のままになり、
- * 48000 で鳴らして「遅くて低い」になる（実機で踏んだ）。取れるまで測り直す。
+ * 2 つの理由で「一度測って終わり」にできない。
+ *
+ *   1. krisp がロードされた瞬間に検査すると、まだ 1 フレームも処理しておらず
+ *      0 回で返る。その場合レートが永久に不明のままになり、48000 で鳴らして
+ *      「遅くて低い」になる（実機で踏んだ）
+ *   2. **接続中にレートが変わる。** 音声品質（Nitro / チャンネルのビットレート）で
+ *      フレーム長が 320 と 480 の間で動く。変わった瞬間にピッチと速度がズレるが、
+ *      音でしか分からないので気付きにくい（実機で踏んだ）
+ *
+ * したがって、取れるまで短い間隔で測り直し、取れた後も定期的に見張る。
  */
 const RATE_RETRY_MS = 2_000
 const RATE_RETRY_MAX = 15
+/** 取れた後の見張り間隔。品質変更に追随するため */
+const RATE_RECHECK_MS = 30_000
 let rateRetry: NodeJS.Timeout | null = null
 
 function cancelRateRetry(): void {
@@ -71,9 +80,14 @@ function cancelRateRetry(): void {
   rateRetry = null
 }
 
+/**
+ * レートを測り直す予約。
+ * left は「まだ一度も取れていない」ときの残り試行回数。取れた後は見張りに移る。
+ */
 function scheduleRateRetry(pid: number, left: number): void {
   cancelRateRetry()
-  if (left <= 0) {
+  const known = lastRate.sampleRate !== null
+  if (!known && left <= 0) {
     emit({
       ev: 'log',
       level: 'warn',
@@ -81,27 +95,38 @@ function scheduleRateRetry(pid: number, left: number): void {
     })
     return
   }
-  rateRetry = setTimeout(() => {
-    rateRetry = null
-    void probePid(pid).then(
-      (p) => {
-        // 測っている間に別の相手へ移っていたら捨てる
-        if (supervisor?.attachedPid() !== pid) return
-        if (p.sampleRate === null) {
-          scheduleRateRetry(pid, left - 1)
-          return
-        }
-        lastRate = { sampleRate: p.sampleRate, frameSamples: p.frameSamples }
-        setState('attached', pid, null)
-        emit({
-          ev: 'log',
-          level: 'info',
-          msg: `注入レートを測りました: ${p.sampleRate} Hz（${p.frameSamples} サンプル/フレーム）`
-        })
-      },
-      () => scheduleRateRetry(pid, left - 1)
-    )
-  }, RATE_RETRY_MS)
+  rateRetry = setTimeout(
+    () => {
+      rateRetry = null
+      void probePid(pid).then(
+        (p) => {
+          // 測っている間に別の相手へ移っていたら捨てる
+          if (supervisor?.attachedPid() !== pid) return
+          if (p.sampleRate === null) {
+            // 鳴っていないだけかもしれない。既知の値は保ったまま次を待つ
+            scheduleRateRetry(pid, known ? RATE_RETRY_MAX : left - 1)
+            return
+          }
+          if (p.sampleRate !== lastRate.sampleRate) {
+            const before = lastRate.sampleRate
+            lastRate = { sampleRate: p.sampleRate, frameSamples: p.frameSamples }
+            setState('attached', pid, null)
+            emit({
+              ev: 'log',
+              level: 'info',
+              msg:
+                before === null
+                  ? `注入レートを測りました: ${p.sampleRate} Hz（${p.frameSamples} サンプル/フレーム）`
+                  : `注入レートが変わりました: ${before} Hz → ${p.sampleRate} Hz（音声品質の変更）`
+            })
+          }
+          scheduleRateRetry(pid, RATE_RETRY_MAX)
+        },
+        () => scheduleRateRetry(pid, known ? RATE_RETRY_MAX : left - 1)
+      )
+    },
+    known ? RATE_RECHECK_MS : RATE_RETRY_MS
+  )
 }
 
 /**
@@ -237,8 +262,8 @@ async function main(): Promise<void> {
     onAttached: (pid, probe) => {
       lastRate = { sampleRate: probe.sampleRate, frameSamples: probe.frameSamples }
       setState('attached', pid, null)
-      // 噛んだ瞬間はまだ処理が始まっていないことがある。取れていなければ測り直す
-      if (probe.sampleRate === null) scheduleRateRetry(pid, RATE_RETRY_MAX)
+      // 取れていなければ測り直し、取れていても見張りに入る（品質変更への追随）
+      scheduleRateRetry(pid, RATE_RETRY_MAX)
     },
     onLost: () => {
       cancelRateRetry()
