@@ -1,0 +1,198 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { EngineState } from '../shared/ipc.js'
+import type { EngineEvent, PlayReq } from '../shared/types.js'
+import { createEngineCore, type EngineCore } from './core.js'
+import { Injector, listProcesses, loadFrida, probePid } from './injector.js'
+import { createSupervisor, type Supervisor } from './supervisor.js'
+import { FridaGate } from './transmit.js'
+
+/**
+ * エンジン本体。utilityProcess の子として動く。
+ *
+ * frida が居るのはこのプロセスだけ。ネイティブが落ちても Discord は生き残り、
+ * patcher が 3 秒で起こし直す。だからここでは「落ちない努力」より
+ * 「落ちた理由が上に伝わること」を優先する。
+ *
+ * 親との通信は process.parentPort。構造化複製できる素のデータだけが通る。
+ */
+
+const port = process.parentPort
+
+/** hook.js は自分と同じディレクトリ（%LOCALAPPDATA%\VoiceCord\dist）に居る */
+const HOOK_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'hook.js')
+
+function post(msg: unknown): void {
+  try {
+    port.postMessage(msg)
+  } catch (e) {
+    // 親が先に死んでいる。ここで投げても誰も受け取らないのでログだけ
+    console.error('[engine] 親へ送れませんでした', e)
+  }
+}
+
+const emit = (payload: EngineEvent): void => post({ t: 'ev', payload })
+
+let lastState: EngineState = 'starting'
+const setState = (state: EngineState, attachedPid: number | null, error: string | null): void => {
+  lastState = state
+  post({ t: 'state', state, attachedPid, error })
+}
+
+const inj = new Injector()
+const gate = new FridaGate(inj, {
+  // ゲートの状態遷移はユーザー向けの文ではなく内部ログ。status で流すと
+  // renderer が全部トーストするため、再生のたびに英語が点滅する
+  onStatus: (m) => emit({ ev: 'log', msg: m })
+})
+let core: EngineCore | null = null
+let supervisor: Supervisor | null = null
+
+/**
+ * 要求の処理。ここに無いチャンネルは patcher 側の担当なので、
+ * 届いた時点で配線の誤り。無言で undefined を返さず理由を返す。
+ */
+type Handler = (args: unknown[]) => unknown
+
+function need(): EngineCore {
+  if (core === null) throw new Error('エンジンが初期化されていません')
+  return core
+}
+
+const handlers: Record<string, Handler> = {
+  'voicecord:detach': async () => {
+    // 手動で離す。以後この起動では自動で噛み直さない
+    // （噛み直したいときは patcher 側の再アタッチ＝エンジン再起動を使う）
+    supervisor?.stop()
+    gate.revertNow()
+    await inj.detach()
+    need().resetSession()
+    setState('searching', null, null)
+  },
+
+  'voicecord:preload': ([srcId, fp, pcm]) => {
+    if (typeof srcId !== 'string' || typeof fp !== 'string') {
+      throw new Error('音源の指定が不正です')
+    }
+    if (!(pcm instanceof ArrayBuffer)) throw new Error('PCM が届いていません')
+    return need().preloadPcm(srcId, fp, Buffer.from(pcm))
+  },
+
+  'voicecord:play': ([req]) => need().play(req as PlayReq),
+  'voicecord:stop': ([vid]) => need().stop(String(vid)),
+  'voicecord:stopAll': () => need().stopAll(),
+  'voicecord:setVoiceVolume': ([vid, vol]) => need().setVoiceVolume(String(vid), Number(vol)),
+  'voicecord:setMaster': ([v]) => need().setMaster(Number(v)),
+  'voicecord:openGate': ([guardMs]) => need().preOpenGate(Number(guardMs) || 1500),
+  'voicecord:calibStart': ([tag, frames]) => need().calibStart(String(tag), Number(frames)),
+  'voicecord:calibStop': () => need().calibStop()
+}
+
+port.on('message', (e) => {
+  const msg = (e as { data?: unknown }).data
+  if (typeof msg !== 'object' || msg === null) return
+  const m = msg as { t?: string; id?: number; ch?: string; args?: unknown[] }
+  if (m.t !== 'req' || typeof m.id !== 'number' || typeof m.ch !== 'string') return
+  const fn = handlers[m.ch]
+  if (fn === undefined) {
+    post({ t: 'res', id: m.id, ok: false, error: `${m.ch} はエンジンの担当ではありません（配線の誤り）` })
+    return
+  }
+  void Promise.resolve()
+    .then(() => fn(Array.isArray(m.args) ? m.args : []))
+    .then(
+      (value) => post({ t: 'res', id: m.id, ok: true, value }),
+      (err: unknown) =>
+        post({ t: 'res', id: m.id, ok: false, error: err instanceof Error ? err.message : String(err) })
+    )
+})
+
+/**
+ * 後始末。ゲート復帰 4 層の 1 層目。
+ *
+ * 親が消えた／終了を指示されたとき、送信を開いたまま死なない。
+ * ただし真の保証は hook.js 側にある（新しい Connection* を捕まえた時点で
+ * 無条件に SetPTTActive(0) を撃つ）ので、ここが間に合わなくても最長 5 秒で閉じる。
+ */
+let shuttingDown = false
+function shutdown(): void {
+  if (shuttingDown) return
+  shuttingDown = true
+  try {
+    supervisor?.stop()
+  } catch {
+    // 監視が止められなくても後始末は続ける
+  }
+  try {
+    gate.revertNow()
+  } catch {
+    // 既に切れていれば no-op になる
+  }
+  process.exit(0)
+}
+
+// 'close' は Electron の ParentPort が持つが、型定義が 'message' しか
+// 宣言していないので型だけ緩める（M2 のスタブでも同じ経路で動いている）
+;(port as unknown as { on(ev: 'close', fn: () => void): void }).on('close', shutdown)
+process.on('SIGTERM', shutdown)
+process.on('SIGBREAK', shutdown)
+
+async function main(): Promise<void> {
+  setState('starting', null, null)
+
+  // frida をここで一度だけ読む。失敗の理由を状態として上へ返したいので、
+  // モジュールの静的 import にはしていない（injector.ts のコメント参照）
+  try {
+    await loadFrida()
+  } catch (e) {
+    // **終了しない。** 終了すると patcher が「コード N で終了しました」に
+    // 上書きしてしまい、AV に隔離された等の本当の理由が読めなくなる。
+    // 生きたまま理由を持ち続け、再アタッチ（エンジン再起動）で再試行させる
+    setState(
+      'failed',
+      null,
+      `frida を読み込めませんでした: ${e instanceof Error ? e.message : String(e)}`
+    )
+    console.error('[engine] frida のロードに失敗しました', e)
+    return
+  }
+
+  core = createEngineCore({ inj, gate, emit })
+  inj.onEvent = (p) => core?.onHookEvent(p)
+
+  supervisor = createSupervisor({
+    listProcesses,
+    probe: probePid,
+    attach: async (pid) => {
+      await inj.attach(pid, HOOK_PATH)
+      core?.resetSession()
+      return true
+    },
+    // 列挙結果には必ず自分自身が混ざる。除外しないと自分に噛みに行く
+    selfPid: process.pid,
+    // audio utility の親は Discord の browser プロセス＝我々の親でもある
+    parentPid: process.ppid,
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
+    onLog: (level, message) => emit({ ev: 'log', level, msg: message }),
+    onAttached: (pid) => setState('attached', pid, null),
+    onLost: () => setState('searching', null, null)
+  })
+
+  inj.onDetached = () => supervisor?.onDetached()
+
+  // 「生きているが audio utility をまだ見つけていない」。VC に入るまではこれが正常
+  setState('searching', null, null)
+  supervisor.start()
+
+  console.log(`[engine] 起動しました（pid ${process.pid} / 親 ${process.ppid}）`)
+}
+
+void main().catch((e: unknown) => {
+  setState('failed', null, `エンジンの初期化に失敗しました: ${e instanceof Error ? e.message : String(e)}`)
+  console.error('[engine] 初期化に失敗しました', e)
+})
+
+// 型だけ使う（lastState は将来の診断用に保持している）
+export type { EngineState }
+export const currentState = (): EngineState => lastState

@@ -73,6 +73,68 @@ const targets = [
 ]
 
 /**
+ * frida のランタイムを payload へ配る。
+ *
+ * バンドルに巻き込んではいけない。frida は `bindings` パッケージで
+ * frida_binding.node を探しており、bindings は呼び出し元のディレクトリから
+ * 上へ辿って package.json と build/ を見つける。束ねると辿れなくなる。
+ *
+ * frida 本体は package.json と build/ だけあれば動く（src / releng /
+ * subprojects / test は配布に要らない）。prebuild-install はインストール時に
+ * しか使わないので連れて行かない。
+ */
+const FRIDA_RUNTIME_DEPS = ['bindings', 'file-uri-to-path', 'minimatch', 'brace-expansion', 'balanced-match']
+
+/** 同じ内容ならコピーしない。frida のバイナリは 75MB あり、毎回コピーすると遅い */
+function copyIfChanged(from, to) {
+  try {
+    const a = fs.statSync(from)
+    const b = fs.statSync(to)
+    if (a.size === b.size && a.mtimeMs <= b.mtimeMs) return false
+  } catch {
+    // 宛先が無い。コピーする
+  }
+  fs.mkdirSync(path.dirname(to), { recursive: true })
+  fs.copyFileSync(from, to)
+  return true
+}
+
+function copyTree(from, to) {
+  let n = 0
+  for (const e of fs.readdirSync(from, { withFileTypes: true })) {
+    const f = path.join(from, e.name)
+    const t = path.join(to, e.name)
+    if (e.isDirectory()) n += copyTree(f, t)
+    else if (copyIfChanged(f, t)) n += 1
+  }
+  return n
+}
+
+function copyFrida() {
+  const src = path.join(root, 'node_modules')
+  const dst = path.join(outDir, 'node_modules')
+  if (!fs.existsSync(path.join(src, 'frida'))) {
+    console.log('skip frida（node_modules に入っていない）')
+    return
+  }
+  let n = 0
+  n += copyIfChanged(
+    path.join(src, 'frida/package.json'),
+    path.join(dst, 'frida/package.json')
+  )
+  n += copyTree(path.join(src, 'frida/build'), path.join(dst, 'frida/build'))
+  for (const d of FRIDA_RUNTIME_DEPS) {
+    const from = path.join(src, d)
+    if (!fs.existsSync(from)) {
+      console.error(`✗ frida の実行時依存が見つかりません: ${d}`)
+      process.exit(1)
+    }
+    n += copyTree(from, path.join(dst, d))
+  }
+  console.log(`frida ランタイム: ${n} ファイルを更新`)
+}
+
+/**
  * エンジン。utilityProcess.fork の子として Node のモジュールローダに読まれるので
  * ESM のまま出す。frida は packages:'external' で import 文のまま残す
  * （バンドルに巻き込むと bindings が module_root を辿れなくなる）。
@@ -80,9 +142,11 @@ const targets = [
  * M2 の実体はスタブ。M3 で src/engine/engine.mjs に差し替える。
  */
 async function buildEngine() {
-  const entry = fs.existsSync(path.join(root, 'src/engine/engine.mjs'))
-    ? 'src/engine/engine.mjs'
-    : 'src/engine/stub.mjs'
+  // 本物 → スタブ の順に探す。M3 以降は engine.ts が居る
+  const entry = ['src/engine/engine.ts', 'src/engine/engine.mjs', 'src/engine/stub.mjs'].find((e) =>
+    fs.existsSync(path.join(root, e))
+  )
+  if (entry === undefined) throw new Error('エンジンの入口がありません')
   const outfile = path.join(outDir, 'engine.mjs')
   await build({
     bundle: true,
@@ -179,7 +243,10 @@ async function main() {
   await buildManager()
 
   const built = []
-  if (fs.existsSync(path.join(root, 'src/engine'))) built.push(await buildEngine())
+  if (fs.existsSync(path.join(root, 'src/engine'))) {
+    built.push(await buildEngine())
+    copyFrida()
+  }
   for (const t of targets) {
     if (!fs.existsSync(path.join(root, t.entry))) {
       console.log(`skip ${t.name}（${t.entry} がまだ無い）`)

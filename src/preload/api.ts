@@ -117,7 +117,8 @@ export function createApi(ipc: IpcRendererLike, decode: AudioDecoder = createOff
       // 鳴らす直前に PCM を engine へ渡す。engine は fp をキーに持つので、
       // 同じ音源を連打しても 2 回目以降は運ばない
       const pcm = await pcmOf(req.path)
-      await call<void>(CH.preloadPcm, req.fp, pcm.buffer)
+      // キーは engine 側が srcId@fp で作る。指紋だけだと別音源が同じ内容のとき衝突する
+      await call<void>(CH.preloadPcm, req.srcId, req.fp, pcm.buffer)
       return call<string | null>(CH.play, req)
     },
     stop: (vid: string) => call<void>(CH.stop, vid),

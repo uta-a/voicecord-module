@@ -147,7 +147,7 @@ describe('createApi', () => {
     const vid = await api.play({ srcId: 'a', path: 'C:/sounds/a.wav', fp: '1_2', vol: 1 })
     expect(vid).toBe('v1')
     expect(ipc.calls.map((c) => c.ch)).toEqual([CH.readSoundFile, CH.preloadPcm, CH.play])
-    expect(ipc.calls[1]?.args[0]).toBe('1_2')
+    expect(ipc.calls[1]?.args.slice(0, 2)).toEqual(['a', '1_2'])
   })
 
   it('attach は健全なエンジンを起こし直さない（Ctrl+R のたびに殺さない）', async () => {
