@@ -55,6 +55,56 @@ let core: EngineCore | null = null
 let supervisor: Supervisor | null = null
 
 /**
+ * レートの測り直し。
+ *
+ * krisp がロードされた瞬間に検査すると、まだ 1 フレームも処理しておらず
+ * 0 回で返る。一度きりの計測にすると、その場合レートが永久に不明のままになり、
+ * 48000 で鳴らして「遅くて低い」になる（実機で踏んだ）。取れるまで測り直す。
+ */
+const RATE_RETRY_MS = 2_000
+const RATE_RETRY_MAX = 15
+let rateRetry: NodeJS.Timeout | null = null
+
+function cancelRateRetry(): void {
+  if (rateRetry === null) return
+  clearTimeout(rateRetry)
+  rateRetry = null
+}
+
+function scheduleRateRetry(pid: number, left: number): void {
+  cancelRateRetry()
+  if (left <= 0) {
+    emit({
+      ev: 'log',
+      level: 'warn',
+      msg: '注入レートを測れませんでした。48000Hz として扱います。音が遅い / 低い場合は再アタッチしてください'
+    })
+    return
+  }
+  rateRetry = setTimeout(() => {
+    rateRetry = null
+    void probePid(pid).then(
+      (p) => {
+        // 測っている間に別の相手へ移っていたら捨てる
+        if (supervisor?.attachedPid() !== pid) return
+        if (p.sampleRate === null) {
+          scheduleRateRetry(pid, left - 1)
+          return
+        }
+        lastRate = { sampleRate: p.sampleRate, frameSamples: p.frameSamples }
+        setState('attached', pid, null)
+        emit({
+          ev: 'log',
+          level: 'info',
+          msg: `注入レートを測りました: ${p.sampleRate} Hz（${p.frameSamples} サンプル/フレーム）`
+        })
+      },
+      () => scheduleRateRetry(pid, left - 1)
+    )
+  }, RATE_RETRY_MS)
+}
+
+/**
  * 要求の処理。ここに無いチャンネルは patcher 側の担当なので、
  * 届いた時点で配線の誤り。無言で undefined を返さず理由を返す。
  */
@@ -174,15 +224,6 @@ async function main(): Promise<void> {
       core?.resetSession()
       // 状態より先に入れる。setState が読むので順序が要る
       lastRate = { sampleRate: probe.sampleRate, frameSamples: probe.frameSamples }
-      if (probe.sampleRate === null) {
-        emit({
-          ev: 'log',
-          level: 'warn',
-          msg:
-            '注入レートを測れませんでした。48000Hz として扱います。' +
-            'ピッチや速度がおかしい場合は再アタッチしてください'
-        })
-      }
       return true
     },
     // 列挙結果には必ず自分自身が混ざる。除外しないと自分に噛みに行く
@@ -196,8 +237,13 @@ async function main(): Promise<void> {
     onAttached: (pid, probe) => {
       lastRate = { sampleRate: probe.sampleRate, frameSamples: probe.frameSamples }
       setState('attached', pid, null)
+      // 噛んだ瞬間はまだ処理が始まっていないことがある。取れていなければ測り直す
+      if (probe.sampleRate === null) scheduleRateRetry(pid, RATE_RETRY_MAX)
     },
-    onLost: () => setState('searching', null, null)
+    onLost: () => {
+      cancelRateRetry()
+      setState('searching', null, null)
+    }
   })
 
   inj.onDetached = () => supervisor?.onDetached()

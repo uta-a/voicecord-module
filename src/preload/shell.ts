@@ -272,7 +272,12 @@ export function createShell(opts: ShellOptions): Shell {
     fab.title =
       `VoiceCord — ${label}\n${s.discordBuild} ${s.discordVersion}` +
       (s.attachedPid !== null ? `\naudio PID ${s.attachedPid}` : '') +
-      (s.enginePid !== null ? `\nengine PID ${s.enginePid}` : '')
+      (s.enginePid !== null ? `\nengine PID ${s.enginePid}` : '') +
+      // パネルの状態表は正常時に隠れるので、常に見えるここにも出す。
+      // レートがズレていても音でしか分からないのでは切り分けられない
+      (s.sampleRate !== null
+        ? `\n注入レート ${s.sampleRate} Hz（${s.frameSamples ?? '?'} サンプル）`
+        : `\n注入レート 未計測`)
     renderStatus(doc, status, s)
   }
 
