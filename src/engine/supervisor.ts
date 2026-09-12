@@ -12,8 +12,11 @@
  * 親 PID は frida の `enumerateProcesses({scope:'metadata'})` が返す
  * （Windows で返ることは実機で確認済み）。
  *
- * audio utility は**音声を使い始めるまで存在しない**うえ、Chromium がクラッシュから
- * 再起動したりアイドルで畳んだりする。だから一度見つけて終わりにはできない。
+ * **不合格は恒久ではない。** 当初は「krisp を持たない PID は二度と見ない」設計に
+ * していたが、これは注入先が VC 参加時に新しく生まれるプロセスである前提だった。
+ * 実際の注入先は**長命な renderer が VC 参加時に krisp を後から載せる**形なので、
+ * 起動直後に一度検査して恒久的に落とすと、その後 VC に入っても永久に噛まない
+ * （実機で踏んだ）。不合格には期限を付ける。
  */
 
 export interface ProcessInfo {
@@ -45,6 +48,8 @@ export interface SupervisorDeps {
   parentPid: number
   setTimer: (fn: () => void, ms: number) => TimerHandle
   clearTimer: (h: TimerHandle) => void
+  /** 現在時刻（ms）。不合格の期限判定に使う */
+  now: () => number
   onLog?: (level: 'info' | 'warn' | 'error', message: string) => void
   /** 見つかった／見失ったときに呼ばれる */
   onAttached?: (pid: number, probe: ProbeResult) => void
@@ -59,6 +64,20 @@ export const SCAN_BACKOFF_MS: readonly number[] = [3_000, 5_000, 10_000, 30_000]
 
 /** 噛んだ後の見張り間隔。detached が来なかった場合の保険 */
 export const WATCH_INTERVAL_MS = 30_000
+
+/**
+ * 「krisp を持っていなかった」を覚えておく時間。
+ * 短すぎると毎回の走査で全プロセスに attach しに行き、長すぎると VC 参加に
+ * 気付くのが遅れる。krisp を持たないプロセスの検査は即答なので短めでよい。
+ */
+export const NO_KRISP_RETRY_MS = 5_000
+
+/**
+ * 「そもそも attach できなかった」を覚えておく時間。
+ * gpu-process と audio.mojom.AudioService はサンドボックスで恒久的に拒否するので、
+ * 毎回試すとログが溢れるだけになる。
+ */
+export const UNREACHABLE_RETRY_MS = 60_000
 
 export interface Supervisor {
   start(): void
@@ -76,8 +95,11 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   let timer: TimerHandle | null = null
   let backoffIndex = 0
   let attached: number | null = null
-  /** 調べて「違った」PID。二度と attach しない */
-  const rejected = new Set<number>()
+  /**
+   * しばらく見ない PID とその期限。
+   * 恒久的に落とさないのが要点（renderer は後から krisp を載せる）。
+   */
+  const cooldown = new Map<number, number>()
   /** 前回の候補集合。変化したらバックオフを戻す */
   let lastCandidates = ''
   /** 走査の多重起動を防ぐ。enumerate + probe は秒単位でかかりうる */
@@ -147,21 +169,27 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
 
       for (const pid of cands) {
         if (stopped) return
-        if (rejected.has(pid)) continue
+        const until = cooldown.get(pid)
+        if (until !== undefined && deps.now() < until) continue
         let hit: ProbeResult = { found: false, frameSamples: null, sampleRate: null }
         try {
           hit = await deps.probe(pid)
         } catch (e) {
-          // 検査できなかった。恒久的に諦めず、次の走査でもう一度見る
-          // （起動直後のプロセスは attach を弾くことがある）
-          log('info', `PID ${pid} を検査できませんでした: ${msgOf(e)}`)
+          // attach 自体ができなかった。gpu-process と audio.mojom.AudioService は
+          // サンドボックスで恒久的に拒否するので、しばらく見ないことにする。
+          // ただし恒久的には諦めない（起動直後だけ弾かれることもある）
+          if (until === undefined) log('info', `PID ${pid} を検査できませんでした: ${msgOf(e)}`)
+          cooldown.set(pid, deps.now() + UNREACHABLE_RETRY_MS)
           continue
         }
         if (!hit.found) {
-          // krisp を持っていない = 注入先ではない。二度と見ない
-          rejected.add(pid)
+          // 今は krisp を持っていない。**恒久的には落とさない** —
+          // renderer は VC に入った時点で krisp を載せるため
+          cooldown.set(pid, deps.now() + NO_KRISP_RETRY_MS)
           continue
         }
+        // 見つかったら期限を消す（次に見失ってもすぐ探し直せる）
+        cooldown.delete(pid)
         if (stopped) return
         let ok = false
         try {

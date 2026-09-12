@@ -191,6 +191,7 @@ async function main(): Promise<void> {
     parentPid: process.ppid,
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
+    now: () => Date.now(),
     onLog: (level, message) => emit({ ev: 'log', level, msg: message }),
     onAttached: (pid, probe) => {
       lastRate = { sampleRate: probe.sampleRate, frameSamples: probe.frameSamples }

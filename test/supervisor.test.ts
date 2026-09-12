@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   createSupervisor,
+  NO_KRISP_RETRY_MS,
   SCAN_BACKOFF_MS,
+  UNREACHABLE_RETRY_MS,
   WATCH_INTERVAL_MS,
   type ProcessInfo,
   type ProbeResult,
@@ -31,6 +33,7 @@ interface Harness {
   logs: string[]
   lost: number
   setProcs(ps: ProcessInfo[]): void
+  advance(ms: number): void
   setKrisp(pids: number[]): void
   probeThrows(pid: number | null): void
   attachFails(pid: number | null): void
@@ -51,6 +54,7 @@ function harness(): Harness {
   let lost = 0
   const timers = new Map<number, { fn: () => void; ms: number }>()
   let seq = 0
+  let now = 0
 
   const sup = createSupervisor({
     listProcesses: async () => procs,
@@ -75,6 +79,7 @@ function harness(): Harness {
       return h
     },
     clearTimer: (h) => void timers.delete(h as number),
+    now: () => now,
     onLog: (_l, m) => void logs.push(m),
     onLost: () => void (lost += 1)
   })
@@ -89,6 +94,7 @@ function harness(): Harness {
       return lost
     },
     setProcs: (ps) => void (procs = ps),
+    advance: (ms) => void (now += ms),
     setKrisp: (pids) => void (krisp = new Set(pids)),
     probeThrows: (pid) => void (probeThrowPid = pid),
     attachFails: (pid) => void (attachFailPid = pid),
@@ -142,26 +148,59 @@ describe('候補の絞り込み', () => {
 })
 
 describe('検査と注入', () => {
-  it('krisp を持たない PID は二度と検査しない（不合格キャッシュ）', async () => {
+  it('krisp を持たない PID はしばらく見ない（毎回の走査で全部に attach しない）', async () => {
     const h = harness()
     h.setProcs([proc(200), proc(201)])
     h.setKrisp([])
     await run(h)
     expect(h.probed).toEqual([200, 201])
     await h.fire()
-    // 2 周目でも増えていないこと
+    // 期限内なので増えていない
     expect(h.probed).toEqual([200, 201])
   })
 
-  it('検査自体が失敗した PID は諦めない（起動直後は attach を弾かれる）', async () => {
+  it('**恒久的には落とさない。** 後から krisp を載せた renderer に噛める', async () => {
+    // 実機で踏んだ事故の再現。注入先は VC 参加時に新しく生まれるプロセスではなく、
+    // 長命な renderer が VC 参加時に krisp を後から載せる形だった。
+    // 恒久的に不合格にすると、その後 VC に入っても永久に噛まない
+    const h = harness()
+    h.setProcs([proc(200)])
+    h.setKrisp([])
+    await run(h)
+    expect(h.attached).toEqual([])
+
+    // ここで VC に入る。プロセスは同じまま krisp が載る
+    h.setKrisp([200])
+    h.advance(NO_KRISP_RETRY_MS + 1)
+    await h.fire()
+    expect(h.attached).toEqual([200])
+  })
+
+  it('attach できない PID はより長く見ない（gpu と audio はサンドボックスで恒久的に拒否する）', async () => {
     const h = harness()
     h.setProcs([proc(200)])
     h.probeThrows(200)
     await run(h)
     expect(h.probed).toEqual([200])
+
+    // krisp 不在の期限では戻らない
+    h.advance(NO_KRISP_RETRY_MS + 1)
+    await h.fire()
+    expect(h.probed).toEqual([200])
+
+    h.advance(UNREACHABLE_RETRY_MS)
     await h.fire()
     expect(h.probed).toEqual([200, 200])
-    expect(h.logs.some((l) => l.includes('検査できませんでした'))).toBe(true)
+  })
+
+  it('attach できない PID のログは繰り返さない（3 秒ごとに溢れさせない）', async () => {
+    const h = harness()
+    h.setProcs([proc(200)])
+    h.probeThrows(200)
+    await run(h)
+    h.advance(UNREACHABLE_RETRY_MS + 1)
+    await h.fire()
+    expect(h.logs.filter((l) => l.includes('検査できませんでした'))).toHaveLength(1)
   })
 
   it('注入に失敗しても不合格にしない（krisp は持っている）', async () => {
@@ -171,6 +210,7 @@ describe('検査と注入', () => {
     h.attachFails(200)
     await run(h)
     expect(h.attached).toEqual([])
+    // 期限を置かずに次の走査でもう一度見る
     await h.fire()
     expect(h.probed).toEqual([200, 200])
   })
@@ -279,6 +319,7 @@ describe('壊れても止まらない', () => {
         return h
       },
       clearTimer: (h) => void timers.delete(h as number),
+      now: () => 0,
       onLog: (_l, m) => void logs.push(m)
     })
     sup.start()
