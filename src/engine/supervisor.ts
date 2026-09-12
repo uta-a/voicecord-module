@@ -1,5 +1,11 @@
 /**
- * audio utility プロセスの自動検出と常時監視。
+ * 注入先プロセスの自動検出と常時監視。
+ *
+ * **注入先は renderer である。** 旧解析は audio utility だと書いていたが、
+ * 実機（Canary 1.0.1169）では audio.mojom.AudioService がサンドボックスで
+ * frida の注入を拒否し、krisp と discord_voice の両方を持っているのは
+ * renderer だった。renderer に入れるのは Discord がメインウィンドウに
+ * sandbox:false を設定しているため（preload を刺せるのと同じ理由）。
  *
  * 移植元の `pidfind.ts` はそのままでは使えない。旧構成は別アプリから Discord を
  * 探す前提で、実行ファイル名で候補を絞っていた。新構成では**自分が Discord の中に
@@ -44,7 +50,7 @@ export interface SupervisorDeps {
   attach: (pid: number, probe: ProbeResult) => Promise<boolean>
   /** エンジン自身の PID。列挙結果に必ず混ざるので除外が要る */
   selfPid: number
-  /** エンジンの親 = Discord の browser プロセス。audio utility の親でもある */
+  /** エンジンの親 = Discord の browser プロセス。注入先の親でもある */
   parentPid: number
   setTimer: (fn: () => void, ms: number) => TimerHandle
   clearTimer: (h: TimerHandle) => void
