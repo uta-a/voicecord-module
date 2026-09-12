@@ -56,6 +56,8 @@ function main(): void {
     engine: 'starting',
     attachedPid: null,
     enginePid: null,
+    sampleRate: null,
+    frameSamples: null,
     discordBuild: install ? guessBranch(install.resourcesDir) : 'unknown',
     discordVersion: install?.version ?? 'unknown',
     lastError: null,
@@ -120,9 +122,12 @@ function main(): void {
               serviceName: 'VoiceCord engine'
             }) as unknown as EngineProcessLike,
           emit: (e) => subscribers.broadcast(e),
-          onState: (state, attachedPid, error) => {
+          onState: (state, attachedPid, error, rate) => {
             status.engine = state
             status.attachedPid = attachedPid
+            // 注入レートは Discord 側の都合で変わる。決め打ちにせず実測値を運ぶ
+            status.sampleRate = rate.sampleRate
+            status.frameSamples = rate.frameSamples
             // 実機で「どのプロセスがエンジンか」を判別する唯一の手がかり。
             // Discord 自身も node.mojom.NodeService を持っていて、
             // コマンドラインでは我々の子と区別できない

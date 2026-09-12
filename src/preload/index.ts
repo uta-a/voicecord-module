@@ -120,6 +120,8 @@ function main(): void {
         engine: 'failed',
         attachedPid: null,
         enginePid: null,
+        sampleRate: null,
+        frameSamples: null,
         discordBuild: 'unknown',
         discordVersion: 'unknown',
         lastError: `main プロセスと通信できません: ${e instanceof Error ? e.message : String(e)}`,

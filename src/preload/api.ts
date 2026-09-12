@@ -11,7 +11,12 @@ import type {
   SoundItem,
   SourceStats
 } from '../shared/types.js'
-import { createOfflineDecoder, decodeToMono, type AudioDecoder } from './decode.js'
+import {
+  createOfflineDecoder,
+  decodeToMono,
+  PREVIEW_SAMPLE_RATE,
+  type AudioDecoder
+} from './decode.js'
 
 /**
  * renderer 側の窓口。
@@ -21,8 +26,13 @@ import { createOfflineDecoder, decodeToMono, type AudioDecoder } from './decode.
  * 他の mod からは触れない。contextBridge で露出するより厳密に閉じている。
  *
  * デコードはここで行う。main へ生ファイルを要求し、renderer の
- * `decodeAudioData` で 48kHz / mono / f32 にする。ffmpeg を持ち込まずに済み、
+ * `decodeAudioData` で mono / f32 にする。ffmpeg を持ち込まずに済み、
  * store.ts の `getPcm` の呼び口は無改造のまま使える。
+ *
+ * **レートは 2 つある。** 試聴とラウドネス計測は 48000（`localAudio.ts` が
+ * その前提で AudioBuffer を作る）。注入用は hook が実際に消費するレートで、
+ * これは実測値（Canary 1.0.1169 では 32000）。混ぜると「遅くて低い音が鳴る」
+ * か「試聴だけ速い」のどちらかになる。
  */
 
 /** attach の結果が落ち着くまで待つ回数と間隔（合計 3 秒） */
@@ -47,14 +57,39 @@ export interface VoiceCordApi extends Api {
   onEvent(cb: (e: VoiceCordEvent) => void): () => void
 }
 
-export function createApi(ipc: IpcRendererLike, decode: AudioDecoder = createOfflineDecoder()): VoiceCordApi {
+export function createApi(
+  ipc: IpcRendererLike,
+  makeDecoder: (sampleRate: number) => AudioDecoder = createOfflineDecoder
+): VoiceCordApi {
   const call = <T>(ch: string, ...args: unknown[]): Promise<T> => ipc.invoke(ch, ...args) as Promise<T>
 
-  /** 音源 1 本を 48k / mono / f32 にして返す。デコード失敗は理由つきで投げる */
-  const pcmOf = async (soundPath: string): Promise<Float32Array> => {
-    const bytes = await call<ArrayBuffer>(CH.readSoundFile, soundPath)
-    return decodeToMono(bytes, soundPath, decode)
+  /** 実測された注入レート。状態が届くまでは分からない */
+  let injectRate: number | null = null
+
+  /**
+   * 注入に使うレート。状態から取れなければ getStatus で一度だけ聞きに行く。
+   * それでも取れなければ試聴と同じ 48000 で進む（黙って止めるよりは鳴らす）。
+   */
+  const rateForInject = async (): Promise<number> => {
+    if (injectRate !== null) return injectRate
+    try {
+      const s = await call<VoiceCordStatus>(CH.getStatus)
+      if (s.sampleRate !== null) injectRate = s.sampleRate
+    } catch {
+      // 取れなくても既定値で進む
+    }
+    return injectRate ?? PREVIEW_SAMPLE_RATE
   }
+
+  /** 音源 1 本を指定レートの mono / f32 にして返す。デコード失敗は理由つきで投げる */
+  const pcmAt = async (soundPath: string, sampleRate: number): Promise<Float32Array> => {
+    const bytes = await call<ArrayBuffer>(CH.readSoundFile, soundPath)
+    return decodeToMono(bytes, soundPath, makeDecoder(sampleRate))
+  }
+
+  /** 試聴とラウドネス計測用。こちらは常に 48000 */
+  const pcmOf = (soundPath: string): Promise<Float32Array> =>
+    pcmAt(soundPath, PREVIEW_SAMPLE_RATE)
 
   const onEvent: VoiceCordApi['onEvent'] = (cb) => {
     const listener = (_e: unknown, ...args: unknown[]): void => {
@@ -64,6 +99,11 @@ export function createApi(ipc: IpcRendererLike, decode: AudioDecoder = createOff
     ipc.on(CH.event, listener)
     return () => ipc.removeListener(CH.event, listener)
   }
+
+  // 注入レートは attach のたびに測り直される。状態を見張って追随する
+  onEvent((e) => {
+    if (e.ev === 'status') injectRate = e.status.sampleRate
+  })
 
   return {
     getStatus: () => call<VoiceCordStatus>(CH.getStatus),
@@ -115,8 +155,9 @@ export function createApi(ipc: IpcRendererLike, decode: AudioDecoder = createOff
 
     play: async (req: PlayReq): Promise<string | null> => {
       // 鳴らす直前に PCM を engine へ渡す。engine は fp をキーに持つので、
-      // 同じ音源を連打しても 2 回目以降は運ばない
-      const pcm = await pcmOf(req.path)
+      // 同じ音源を連打しても 2 回目以降は hook へ送り直さない。
+      // **ここだけ注入レートでデコードする**（試聴の 48000 とは別）
+      const pcm = await pcmAt(req.path, await rateForInject())
       // キーは engine 側が srcId@fp で作る。指紋だけだと別音源が同じ内容のとき衝突する
       await call<void>(CH.preloadPcm, req.srcId, req.fp, pcm.buffer)
       return call<string | null>(CH.play, req)

@@ -9,8 +9,14 @@
  * （48000Hz / setSinkId / enumerateDevices すべて ok）。
  */
 
-/** hook.js が扱う PCM。48kHz / mono / f32 */
-export const TARGET_SAMPLE_RATE = 48000
+/**
+ * 試聴とラウドネス計測のレート。
+ *
+ * `lib/localAudio.ts` が 48000 で AudioBuffer を作るので、ここも 48000 で揃える。
+ * **注入用のレートとは別物**。注入側は hook が実際に消費するレートに合わせる
+ * （Canary 1.0.1169 では 32000 だった）。
+ */
+export const PREVIEW_SAMPLE_RATE = 48000
 
 /** 生の f32le。デコード不要で直読みできる */
 export const RAW_F32_EXT = '.f32'
@@ -57,12 +63,13 @@ export interface AudioDecoder {
 /**
  * OfflineAudioContext を使うデコーダ。
  *
- * サンプルレートを 48000 で作ると、`decodeAudioData` が 48kHz へリサンプルして返す。
- * ここが hook.js の要求（48kHz / mono / 480 サンプルフレーム）と合う唯一の点。
+ * 指定したレートで作ると `decodeAudioData` がそこへリサンプルして返す。
+ * ブラウザ実装のリサンプラなので、自前の線形補間よりエイリアスが少ない。
+ * 手書きのリサンプラを持たずに済むのが、この形にしている理由。
  */
-export function createOfflineDecoder(): AudioDecoder {
+export function createOfflineDecoder(sampleRate: number = PREVIEW_SAMPLE_RATE): AudioDecoder {
   return async (bytes: ArrayBuffer): Promise<ArrayLike<number>[]> => {
-    const ctx = new OfflineAudioContext(1, 1, TARGET_SAMPLE_RATE)
+    const ctx = new OfflineAudioContext(1, 1, sampleRate)
     const buf = await ctx.decodeAudioData(bytes)
     const chans: Float32Array[] = []
     for (let i = 0; i < buf.numberOfChannels; i++) chans.push(buf.getChannelData(i))

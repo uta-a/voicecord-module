@@ -23,17 +23,40 @@ export async function loadFrida(): Promise<typeof import('frida')> {
   return fridaMod
 }
 
-/** discord_krisp.node と Krisp NC 処理関数（Float / int16 どちらか）の有無を調べる */
+/**
+ * discord_krisp.node の有無と、**1 フレームのサンプル数と発火レート**を測る。
+ *
+ * レートを実測するのは、旧解析の「48kHz / 480 サンプル」が今日の Canary では
+ * 320 サンプル / 100Hz（＝32kHz）になっていたため。決め打ちにすると、
+ * Discord がレートを変えた瞬間に「遅くて低い音が鳴る」という、動いているようで
+ * 動いていない壊れ方をする（実機で踏んだ）。
+ */
 const FIND_JS = `
 const m = Process.findModuleByName("discord_krisp.node");
 if (!m) { send({found:false}); }
 else {
-  let hasFn = false;
-  try { hasFn = !!m.getExportByName("KrispNCProcessFloat"); } catch(e){}
-  if (!hasFn) { try { hasFn = !!m.getExportByName("KrispNCProcess"); } catch(e){} }
-  send({found:true, hasFn:hasFn});
+  let fn = null;
+  try { fn = m.getExportByName("KrispNCProcessFloat"); } catch(e){}
+  if (!fn) { try { fn = m.getExportByName("KrispNCProcess"); } catch(e){} }
+  if (!fn) { send({found:false}); }
+  else {
+    // cnt の出現回数を数える。フレーム長が揺れる実装でも最頻値を拾えるようにする
+    var counts = {}, calls = 0, t0 = 0;
+    Interceptor.attach(fn, { onEnter: function(a) {
+      if (t0 === 0) t0 = Date.now();
+      var c = a[2].toInt32();
+      if (c > 0 && c <= 4096) { counts[c] = (counts[c] || 0) + 1; calls++; }
+    }});
+    setTimeout(function(){
+      var elapsed = t0 === 0 ? 0 : (Date.now() - t0);
+      send({ found: true, calls: calls, elapsedMs: elapsed, counts: counts });
+    }, MEASURE_MS);
+  }
 }
 `
+
+/** 発火レートを測る窓。短すぎると端数で誤差が出る */
+const MEASURE_MS = 700
 
 /** 検査スクリプトの返事を待つ上限。返らないプロセスで居座らない */
 const PROBE_TIMEOUT_MS = 1500
@@ -58,28 +81,46 @@ function ppidOf(params: unknown): number | null {
   return typeof v === 'number' ? v : null
 }
 
+export interface KrispProbe {
+  /** krisp を持ち、処理関数が居るか */
+  found: boolean
+  /** 1 フレームのサンプル数（最頻値）。測れなければ null */
+  frameSamples: number | null
+  /** 1 秒あたりに消費されるサンプル数。測れなければ null */
+  sampleRate: number | null
+}
+
+/** よくあるレート。実測がこの近傍なら丸める（端数のまま扱うと診断が読みにくい） */
+const KNOWN_RATES = [8000, 16000, 24000, 32000, 44100, 48000]
+/** 丸めを許す幅 */
+const SNAP_TOLERANCE = 0.05
+
+export function snapRate(raw: number): number {
+  for (const r of KNOWN_RATES) {
+    if (Math.abs(raw - r) / r <= SNAP_TOLERANCE) return r
+  }
+  return Math.round(raw)
+}
+
 /**
- * この PID が audio utility か調べる。
+ * この PID が注入先かを調べ、ついでにフレーム長とレートを測る。
  * attach して検査スクリプトを走らせ、必ず外す（居座ると Discord 側の負荷になる）。
  */
-export async function probePid(pid: number): Promise<boolean> {
+export async function probePid(pid: number): Promise<KrispProbe> {
   const device = await (await loadFrida()).getLocalDevice()
   let session: Session | null = null
-  let found = false
+  let result: KrispProbe = { found: false, frameSamples: null, sampleRate: null }
   try {
     session = await device.attach(pid)
-    const script = await session.createScript(FIND_JS)
+    const script = await session.createScript(FIND_JS.replace('MEASURE_MS', String(MEASURE_MS)))
     const answered = new Promise<void>((resolve) => {
       script.message.connect((message: Message) => {
-        if (message.type === 'send') {
-          const p = message.payload as { found?: boolean; hasFn?: boolean }
-          found = p.found === true && p.hasFn === true
-        }
+        if (message.type === 'send') result = interpret(message.payload)
         resolve()
       })
     })
     await script.load()
-    await Promise.race([answered, delay(PROBE_TIMEOUT_MS)])
+    await Promise.race([answered, delay(MEASURE_MS + PROBE_TIMEOUT_MS)])
     try {
       await script.unload()
     } catch {
@@ -94,7 +135,32 @@ export async function probePid(pid: number): Promise<boolean> {
       }
     }
   }
-  return found
+  return result
+}
+
+/** 検査スクリプトの返事を KrispProbe へ。測れなかった項目は null のままにする */
+export function interpret(payload: unknown): KrispProbe {
+  const p = payload as { found?: boolean; calls?: number; elapsedMs?: number; counts?: Record<string, number> }
+  if (p?.found !== true) return { found: false, frameSamples: null, sampleRate: null }
+  const counts = p.counts ?? {}
+  let frameSamples: number | null = null
+  let best = 0
+  for (const [k, n] of Object.entries(counts)) {
+    if (n > best) {
+      best = n
+      frameSamples = Number(k)
+    }
+  }
+  // krisp は載っているが鳴っていない（VC に入っていない等）。found は返すが
+  // レートは測れない。呼び出し側は既定値で進み、次の attach で測り直す
+  const calls = p.calls ?? 0
+  const elapsed = p.elapsedMs ?? 0
+  if (frameSamples === null || calls <= 1 || elapsed <= 0) {
+    return { found: true, frameSamples, sampleRate: null }
+  }
+  // 最初の呼び出しで計測を始めるので、区間に含まれる呼び出しは calls - 1 回ぶん
+  const hz = ((calls - 1) * 1000) / elapsed
+  return { found: true, frameSamples, sampleRate: snapRate(frameSamples * hz) }
 }
 
 function delay(ms: number): Promise<void> {

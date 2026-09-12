@@ -210,6 +210,8 @@ const STATUS: VoiceCordStatus = {
   engine: 'starting',
   attachedPid: null,
   enginePid: null,
+  sampleRate: null,
+  frameSamples: null,
   discordBuild: 'canary',
   discordVersion: '1.0.1099',
   lastError: null,

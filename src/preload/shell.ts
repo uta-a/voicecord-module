@@ -320,7 +320,15 @@ function renderStatus(doc: Document, body: HTMLElement, s: VoiceCordStatus): voi
     ['音声プロセス', s.attachedPid === null ? '未検出' : String(s.attachedPid)],
     // どのプロセスを見ればいいかが分からないと、エンジンだけを落として
     // 復帰を確かめる、といった切り分けができない
-    ['エンジン', s.enginePid === null ? '起動していません' : `PID ${s.enginePid}`]
+    ['エンジン', s.enginePid === null ? '起動していません' : `PID ${s.enginePid}`],
+    // レートが想定と違うと「遅くて低い音が鳴る」だけで、原因が分からない。
+    // 実測値をそのまま出す
+    [
+      '注入レート',
+      s.sampleRate === null
+        ? '未計測'
+        : `${s.sampleRate} Hz（${s.frameSamples ?? '?'} サンプル/フレーム）`
+    ]
   ]
   for (const [k, v] of rows) {
     const dt = doc.createElement('dt')

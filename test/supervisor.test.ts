@@ -4,6 +4,7 @@ import {
   SCAN_BACKOFF_MS,
   WATCH_INTERVAL_MS,
   type ProcessInfo,
+  type ProbeResult,
   type Supervisor
 } from '../src/engine/supervisor.js'
 
@@ -26,6 +27,7 @@ interface Harness {
   sup: Supervisor
   probed: number[]
   attached: number[]
+  attachedProbes: ProbeResult[]
   logs: string[]
   lost: number
   setProcs(ps: ProcessInfo[]): void
@@ -44,6 +46,7 @@ function harness(): Harness {
   let attachFailPid: number | null = null
   const probed: number[] = []
   const attached: number[] = []
+  const attachedProbes: ProbeResult[] = []
   const logs: string[] = []
   let lost = 0
   const timers = new Map<number, { fn: () => void; ms: number }>()
@@ -55,10 +58,13 @@ function harness(): Harness {
       probed.push(pid)
       if (pid === probeThrowPid) throw new Error('attach を弾かれました')
       return krisp.has(pid)
+        ? { found: true, frameSamples: 320, sampleRate: 32000 }
+        : { found: false, frameSamples: null, sampleRate: null }
     },
-    attach: async (pid) => {
+    attach: async (pid, probe) => {
       if (pid === attachFailPid) return false
       attached.push(pid)
+      attachedProbes.push(probe)
       return true
     },
     selfPid: SELF,
@@ -77,6 +83,7 @@ function harness(): Harness {
     sup,
     probed,
     attached,
+    attachedProbes,
     logs,
     get lost() {
       return lost
@@ -168,6 +175,15 @@ describe('検査と注入', () => {
     expect(h.probed).toEqual([200, 200])
   })
 
+  it('実測したフレーム長とレートが attach と通知まで届く', async () => {
+    const h = harness()
+    h.setProcs([proc(200)])
+    h.setKrisp([200])
+    await run(h)
+    expect(h.attachedProbes).toEqual([{ found: true, frameSamples: 320, sampleRate: 32000 }])
+    expect(h.logs.some((l) => l.includes('320 サンプル') && l.includes('32000 Hz'))).toBe(true)
+  })
+
   it('見つけたら噛んで、以後は見張り間隔になる', async () => {
     const h = harness()
     h.setProcs([proc(200)])
@@ -253,7 +269,7 @@ describe('壊れても止まらない', () => {
     const logs: string[] = []
     const sup = createSupervisor({
       listProcesses: () => Promise.reject(new Error('device がありません')),
-      probe: async () => false,
+      probe: async () => ({ found: false, frameSamples: null, sampleRate: null }),
       attach: async () => true,
       selfPid: SELF,
       parentPid: PARENT,

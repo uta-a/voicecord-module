@@ -18,6 +18,8 @@ const STATUS: VoiceCordStatus = {
   engine: 'searching',
   attachedPid: null,
   enginePid: null,
+  sampleRate: null,
+  frameSamples: null,
   discordBuild: 'canary',
   discordVersion: '1.0.1099',
   lastError: null,
@@ -267,10 +269,17 @@ describe('portalContainer', () => {
 })
 
 describe('createApi', () => {
-  function fakeIpc(): IpcRendererLike & { listeners: Array<(e: unknown, ...a: unknown[]) => void> } {
+  function fakeIpc(): IpcRendererLike & {
+    listeners: Array<(e: unknown, ...a: unknown[]) => void>
+    /** main からのプッシュを模す。createApi は内部にもリスナーを持つので全員に配る */
+    push: (payload: unknown) => void
+  } {
     const listeners: Array<(e: unknown, ...a: unknown[]) => void> = []
     return {
       listeners,
+      push: (payload) => {
+        for (const l of [...listeners]) l(null, payload)
+      },
       invoke: vi.fn(async (ch: string) => (ch === CH.getStatus || ch === CH.subscribe ? STATUS : undefined)),
       on: (_ch, l) => void listeners.push(l),
       removeListener: (_ch, l) => {
@@ -289,11 +298,12 @@ describe('createApi', () => {
     const ipc = fakeIpc()
     const api = createApi(ipc)
     const seen: unknown[] = []
+    const before = ipc.listeners.length
     const off = api.onEvent((e) => seen.push(e))
-    ipc.listeners[0]!(null, { ev: 'status', status: STATUS })
+    ipc.push({ ev: 'status', status: STATUS })
     expect(seen).toHaveLength(1)
     off()
-    expect(ipc.listeners).toHaveLength(0)
+    expect(ipc.listeners).toHaveLength(before)
   })
 
   it('形の合わないペイロードは UI に渡さない', () => {
@@ -301,9 +311,9 @@ describe('createApi', () => {
     const api = createApi(ipc)
     const seen: unknown[] = []
     api.onEvent((e) => seen.push(e))
-    ipc.listeners[0]!(null, { ev: 'nope' })
-    ipc.listeners[0]!(null, null)
-    ipc.listeners[0]!(null, 'string')
+    ipc.push({ ev: 'nope' })
+    ipc.push(null)
+    ipc.push('string')
     expect(seen).toHaveLength(0)
   })
 })

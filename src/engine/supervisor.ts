@@ -25,13 +25,20 @@ export interface ProcessInfo {
 
 export type TimerHandle = unknown
 
+/** 検査の結果。フレーム長とレートは測れなければ null */
+export interface ProbeResult {
+  found: boolean
+  frameSamples: number | null
+  sampleRate: number | null
+}
+
 export interface SupervisorDeps {
   /** プロセス一覧。attach しないので安い */
   listProcesses: () => Promise<ProcessInfo[]>
-  /** krisp の処理関数を持つか調べる。attach するので失敗しうる */
-  probe: (pid: number) => Promise<boolean>
+  /** krisp の処理関数を持つか調べ、ついでにフレーム長とレートを測る */
+  probe: (pid: number) => Promise<ProbeResult>
   /** 見つかったので hook を注入する。成功したら true */
-  attach: (pid: number) => Promise<boolean>
+  attach: (pid: number, probe: ProbeResult) => Promise<boolean>
   /** エンジン自身の PID。列挙結果に必ず混ざるので除外が要る */
   selfPid: number
   /** エンジンの親 = Discord の browser プロセス。audio utility の親でもある */
@@ -40,7 +47,7 @@ export interface SupervisorDeps {
   clearTimer: (h: TimerHandle) => void
   onLog?: (level: 'info' | 'warn' | 'error', message: string) => void
   /** 見つかった／見失ったときに呼ばれる */
-  onAttached?: (pid: number) => void
+  onAttached?: (pid: number, probe: ProbeResult) => void
   onLost?: () => void
 }
 
@@ -141,7 +148,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       for (const pid of cands) {
         if (stopped) return
         if (rejected.has(pid)) continue
-        let hit = false
+        let hit: ProbeResult = { found: false, frameSamples: null, sampleRate: null }
         try {
           hit = await deps.probe(pid)
         } catch (e) {
@@ -150,24 +157,27 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
           log('info', `PID ${pid} を検査できませんでした: ${msgOf(e)}`)
           continue
         }
-        if (!hit) {
-          // krisp を持っていない = audio utility ではない。二度と見ない
+        if (!hit.found) {
+          // krisp を持っていない = 注入先ではない。二度と見ない
           rejected.add(pid)
           continue
         }
         if (stopped) return
         let ok = false
         try {
-          ok = await deps.attach(pid)
+          ok = await deps.attach(pid, hit)
         } catch (e) {
           log('error', `PID ${pid} への注入に失敗しました: ${msgOf(e)}`)
         }
         if (ok) {
           attached = pid
           backoffIndex = 0
-          log('info', `audio utility に噛みました（PID ${pid}）`)
+          log(
+            'info',
+            `注入先に噛みました（PID ${pid} / ${hit.frameSamples ?? '?'} サンプル ・ ${hit.sampleRate ?? '?'} Hz）`
+          )
           try {
-            deps.onAttached?.(pid)
+            deps.onAttached?.(pid, hit)
           } catch {
             // 通知先の失敗で監視を止めない
           }

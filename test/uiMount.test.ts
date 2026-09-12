@@ -54,6 +54,8 @@ describe('UI のマウント', () => {
       engine: 'attached',
       attachedPid: 4242,
       enginePid: null,
+      sampleRate: null,
+      frameSamples: null,
       discordBuild: 'canary',
       discordVersion: '1.0.1158',
       lastError: null,

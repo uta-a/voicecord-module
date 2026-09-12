@@ -48,6 +48,9 @@ export interface EngineStateMsg {
   t: 'state'
   state: EngineState
   attachedPid: number | null
+  /** 実測した注入レート。測れなければ null */
+  sampleRate?: number | null
+  frameSamples?: number | null
   error: string | null
 }
 

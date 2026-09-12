@@ -36,8 +36,13 @@ export interface EngineHostDeps {
   fork: () => EngineProcessLike
   /** status / log / engine イベントの出口 */
   emit: (e: VoiceCordEvent) => void
-  /** エンジンの生死が変わったときに呼ばれる */
-  onState: (state: EngineState, attachedPid: number | null, error: string | null) => void
+  /** エンジンの生死が変わったときに呼ばれる。rate は実測した注入レート */
+  onState: (
+    state: EngineState,
+    attachedPid: number | null,
+    error: string | null,
+    rate: { sampleRate: number | null; frameSamples: number | null }
+  ) => void
   setTimer: (fn: () => void, ms: number) => TimerHandle
   clearTimer: (h: TimerHandle) => void
   /** 現在時刻（ms）。生存時間の判定に使う */
@@ -81,9 +86,17 @@ export function createEngineHost(deps: EngineHostDeps): EngineHost {
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >()
 
-  const setState = (s: EngineState, pid: number | null, err: string | null): void => {
+  const setState = (
+    s: EngineState,
+    pid: number | null,
+    err: string | null,
+    rate: { sampleRate: number | null; frameSamples: number | null } = {
+      sampleRate: null,
+      frameSamples: null
+    }
+  ): void => {
     engineState = s
-    deps.onState(s, pid, err)
+    deps.onState(s, pid, err, rate)
   }
 
   const log = (level: 'info' | 'warn' | 'error', message: string): void => {
@@ -126,7 +139,10 @@ export function createEngineHost(deps: EngineHostDeps): EngineHost {
       deps.emit({ ev: 'engine', payload: msg.payload })
       return
     }
-    setState(msg.state, msg.attachedPid, msg.error)
+    setState(msg.state, msg.attachedPid, msg.error, {
+      sampleRate: msg.sampleRate ?? null,
+      frameSamples: msg.frameSamples ?? null
+    })
   }
 
   const onExit = (code: number): void => {

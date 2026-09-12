@@ -75,6 +75,16 @@ export interface VoiceCordStatus {
   enginePid: number | null
   discordBuild: string
   discordVersion: string
+  /**
+   * hook が 1 秒あたりに消費するサンプル数。注入用 PCM のデコードレートになる。
+   *
+   * 旧解析では 48000 固定と書かれていたが、Canary 1.0.1169 の実機では
+   * 320 サンプル × 100Hz = 32000 だった。Discord 側でいつでも変わりうるので、
+   * 決め打ちにせず attach のたびに実測する。測れなければ null。
+   */
+  sampleRate: number | null
+  /** 1 フレームのサンプル数。診断用（sampleRate の根拠） */
+  frameSamples: number | null
   /** engine が failed のときの理由。UI にそのまま出す */
   lastError: string | null
   /** patcher のサブシステムのうち起動に失敗したもの */

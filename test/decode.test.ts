@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createApi, type IpcRendererLike } from '../src/preload/api.js'
+import type { AudioDecoder } from '../src/preload/decode.js'
 import { decodeToMono, isRawF32, rawF32ToMono, toMono } from '../src/preload/decode.js'
 import { CH, type VoiceCordStatus } from '../src/shared/ipc.js'
 import type { SourceStats } from '../src/shared/types.js'
@@ -93,6 +94,8 @@ const STATUS: VoiceCordStatus = {
   engine: 'attached',
   attachedPid: 4242,
   enginePid: null,
+  sampleRate: null,
+  frameSamples: null,
   discordBuild: 'canary',
   discordVersion: '1.0.1165',
   lastError: null,
@@ -126,11 +129,14 @@ function fakeIpc(results: Record<string, unknown> = {}): FakeIpc {
   }
 }
 
-/** 2ch のステレオを返すデコーダ */
-const stereo = async (): Promise<Float32Array[]> => [
-  new Float32Array([1, 0]),
-  new Float32Array([1, 0])
-]
+/** 2ch のステレオを返すデコーダ工場。要求されたレートを記録する */
+function stereoAt(seen?: number[]): (rate: number) => AudioDecoder {
+  return (rate) => {
+    seen?.push(rate)
+    return async () => [new Float32Array([1, 0]), new Float32Array([1, 0])]
+  }
+}
+const stereo = stereoAt()
 
 describe('createApi', () => {
   it('getPcm は生ファイルを取り寄せてデコードする', async () => {
@@ -146,8 +152,14 @@ describe('createApi', () => {
     const api = createApi(ipc, stereo)
     const vid = await api.play({ srcId: 'a', path: 'C:/sounds/a.wav', fp: '1_2', vol: 1 })
     expect(vid).toBe('v1')
-    expect(ipc.calls.map((c) => c.ch)).toEqual([CH.readSoundFile, CH.preloadPcm, CH.play])
-    expect(ipc.calls[1]?.args.slice(0, 2)).toEqual(['a', '1_2'])
+    // レートが未取得なので、最初の 1 回だけ getStatus を聞きに行く
+    expect(ipc.calls.map((c) => c.ch)).toEqual([
+      CH.getStatus,
+      CH.readSoundFile,
+      CH.preloadPcm,
+      CH.play
+    ])
+    expect(ipc.calls[2]?.args.slice(0, 2)).toEqual(['a', '1_2'])
   })
 
   it('attach は健全なエンジンを起こし直さない（Ctrl+R のたびに殺さない）', async () => {
@@ -192,7 +204,7 @@ describe('createApi', () => {
   it('sourceStats はデコード結果から測る', async () => {
     const loud = new Float32Array(4800).fill(0.5)
     const ipc = fakeIpc({ [CH.readSoundFile]: new ArrayBuffer(8) })
-    const api = createApi(ipc, async () => [loud])
+    const api = createApi(ipc, () => async () => [loud])
     const st = (await api.sourceStats('C:/sounds/a.wav')) as SourceStats
     expect(st.samples).toBe(4800)
     expect(st.peak).toBeCloseTo(0.5, 5)
@@ -202,8 +214,42 @@ describe('createApi', () => {
 
   it('無音は activeRatio 0（0 除算にしない）', async () => {
     const ipc = fakeIpc({ [CH.readSoundFile]: new ArrayBuffer(8) })
-    const api = createApi(ipc, async () => [new Float32Array(0)])
+    const api = createApi(ipc, () => async () => [new Float32Array(0)])
     expect((await api.sourceStats('a.wav')).activeRatio).toBe(0)
+  })
+
+  it('試聴は 48000、注入は実測レートでデコードする', async () => {
+    const seen: number[] = []
+    const ipc = fakeIpc({
+      [CH.readSoundFile]: new ArrayBuffer(8),
+      [CH.play]: 'v1',
+      [CH.getStatus]: { ...STATUS, sampleRate: 32000, frameSamples: 320 }
+    })
+    const api = createApi(ipc, stereoAt(seen))
+    await api.getPcm('a.wav')
+    await api.play({ srcId: 'a', path: 'a.wav', fp: '1_2', vol: 1 })
+    expect(seen).toEqual([48000, 32000])
+  })
+
+  it('レートが測れていなければ 48000 で進む（黙って止めない）', async () => {
+    const seen: number[] = []
+    const ipc = fakeIpc({ [CH.readSoundFile]: new ArrayBuffer(8), [CH.play]: 'v1' })
+    const api = createApi(ipc, stereoAt(seen))
+    await api.play({ srcId: 'a', path: 'a.wav', fp: '1_2', vol: 1 })
+    expect(seen).toEqual([48000])
+  })
+
+  it('状態イベントで注入レートに追随する（再アタッチで変わりうる）', async () => {
+    const seen: number[] = []
+    const ipc = fakeIpc({ [CH.readSoundFile]: new ArrayBuffer(8), [CH.play]: 'v1' })
+    const api = createApi(ipc, stereoAt(seen))
+    // 購読を開始してから状態が届く
+    api.onEvent(() => {})
+    ipc.push({ ev: 'status', status: { ...STATUS, sampleRate: 16000, frameSamples: 160 } })
+    await api.play({ srcId: 'a', path: 'a.wav', fp: '1_2', vol: 1 })
+    expect(seen).toEqual([16000])
+    // getStatus を聞きに行っていないこと（イベントで足りている）
+    expect(ipc.calls.some((c) => c.ch === CH.getStatus)).toBe(false)
   })
 
   it('onEngineEvent はエンジン由来のイベントだけを渡す', () => {

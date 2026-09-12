@@ -34,9 +34,15 @@ function post(msg: unknown): void {
 const emit = (payload: EngineEvent): void => post({ t: 'ev', payload })
 
 let lastState: EngineState = 'starting'
+/** 直近に実測した注入レート。attach のたびに測り直す */
+let lastRate: { sampleRate: number | null; frameSamples: number | null } = {
+  sampleRate: null,
+  frameSamples: null
+}
 const setState = (state: EngineState, attachedPid: number | null, error: string | null): void => {
   lastState = state
-  post({ t: 'state', state, attachedPid, error })
+  if (attachedPid === null) lastRate = { sampleRate: null, frameSamples: null }
+  post({ t: 'state', state, attachedPid, error, ...lastRate })
 }
 
 const inj = new Injector()
@@ -163,9 +169,20 @@ async function main(): Promise<void> {
   supervisor = createSupervisor({
     listProcesses,
     probe: probePid,
-    attach: async (pid) => {
+    attach: async (pid, probe) => {
       await inj.attach(pid, HOOK_PATH)
       core?.resetSession()
+      // 状態より先に入れる。setState が読むので順序が要る
+      lastRate = { sampleRate: probe.sampleRate, frameSamples: probe.frameSamples }
+      if (probe.sampleRate === null) {
+        emit({
+          ev: 'log',
+          level: 'warn',
+          msg:
+            '注入レートを測れませんでした。48000Hz として扱います。' +
+            'ピッチや速度がおかしい場合は再アタッチしてください'
+        })
+      }
       return true
     },
     // 列挙結果には必ず自分自身が混ざる。除外しないと自分に噛みに行く
@@ -175,7 +192,10 @@ async function main(): Promise<void> {
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
     onLog: (level, message) => emit({ ev: 'log', level, msg: message }),
-    onAttached: (pid) => setState('attached', pid, null),
+    onAttached: (pid, probe) => {
+      lastRate = { sampleRate: probe.sampleRate, frameSamples: probe.frameSamples }
+      setState('attached', pid, null)
+    },
     onLost: () => setState('searching', null, null)
   })
 
