@@ -186,6 +186,41 @@ CDP（`--remote-debugging-port=9223`）で機械的に確認した。
 - Canary がセッション中に 1.0.1165 → **1.0.1169 へ自動更新**され、パッチが外れた。
   マネージャの走査が `要再適用（1.0.1165 に適用済みだった）` を正しく出した（可視化 3 の実証）
 
+### 実機で判明した、旧解析との食い違い（Canary 1.0.1169）
+
+**注入先が audio utility ではなく renderer になっている。**
+
+- 本物の `audio.mojom.AudioService`（`--service-sandbox-type=audio`）は
+  **frida のエージェント注入を拒否する**（3 回試して 3 回とも。一過性ではない）。
+  素の node プロセスから試しても同じなので、我々が Discord の子である
+  ことが原因ではなく、対象のサンドボックスが原因
+- renderer には入れる。**Discord がメインウィンドウに `sandbox:false` を
+  設定しているから**（preload 注入の根拠と同じ事実）
+- その renderer に必要なものが全部揃っている
+  - `discord_krisp.node` … `KrispNCProcessFloat` / `KrispNCProcess` の両方
+  - `discord_voice.node` … `?GetStats@Connection@voice@discord@@…` と
+    `?SetPTTActive@Connection@voice@discord@@QEAAX_N00@Z`
+- 旧ドキュメント（`ANALYSIS.md:53` / `CLAUDE.md:51` / `re/RE-NOTES.md:80`）は
+  「utility audio」と書いており、今日の観測と食い違う。M6 で訂正する
+
+**フレームが 480 / 48kHz ではなく 320 / 32kHz になっている。**
+
+```
+KrispNCProcessFloat(session, in, cnt, out, outCap)   ← 引数レイアウトは旧解析どおり
+  cnt = 320, outCap = 320, 発火は 100Hz（5s で 500 回 / 20s で 2001 回）
+  → 320 × 100Hz = 32000 Hz
+  in の最大振幅 0.0229（無発話時の環境ノイズ）/ out の最大振幅 0.0008
+  → Krisp が実際に抑圧している = 生きた収録経路
+```
+
+`re/RE-NOTES.md:75` は `(session, float* in, int n=480, float* out, int m=480)`、
+10ms/480 サンプル・48kHz mono と書いている。**レートが変わった。**
+
+影響: `hook.js` は `cnt` に依存しない作りなので落ちないが、我々が渡す PCM は
+48kHz なので **2/3 の速度・低いピッチで鳴る**。レートを実行時に検出して
+デコード側を合わせる必要がある（`hook.js` は無改造のまま、`probePid` と同じ
+短命スクリプトで `cnt` と発火レートを測るのが筋）。
+
 ## M4 以降
 
 計画ファイル参照。M4 = 旧経路との突き合わせと `.wma` のエラー表面化、
