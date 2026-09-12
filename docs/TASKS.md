@@ -144,11 +144,53 @@ CDP（`--remote-debugging-port=9223`）で機械的に確認した。
 - `attach` が毎回エンジンを再起動していた（M3 では frida ごと落ちる）
 - どのプロセスがエンジンか実機で判別できなかった → `enginePid` を状態に追加
 
-## M3 以降
+## M3 — 実エンジン（frida 投入）
 
-計画ファイル参照。M3 = 実エンジン（frida）、M4 = 旧経路との突き合わせと
-`.wma` のエラー表面化、M4.5 = Discord ネイティブ意匠への UI 作り替え、
-M5 = 堅牢化、M6 = マネージャ仕上げ、M7 = Stable 受け入れ。
+### M3-a frida の導入
+- [x] `frida@16.7.19` を依存に追加（N-API v8 なので再ビルド不要）
+- [x] ランタイムを `payload/node_modules` へ配る（`build.mjs`）。
+      バンドルに巻き込まない（`bindings` が package.json と build/ を上へ辿るため）。
+      同じ内容ならコピーしない（75MB あるので毎回コピーすると遅い）
+- [x] `enumerateProcesses({scope:'metadata'})` が **Windows で ppid を返す**ことを実測
+      （計画の未決事項の 1 つ。`path` / `user` / `started` も取れる）
+
+### M3-b 移植
+- [x] `transmit.ts`（送信ゲート）— 論理を一切変えずに移植
+- [x] `injector.ts` — frida を**遅延ロード**にした（起動失敗の理由を上へ返すため）
+- [x] `core.ts` — ffmpeg 由来のものを全部落とし、PCM は renderer から受け取る
+- [x] `engine.ts` — parentPort の電文、状態通知、後始末
+- [x] `hook.js` を無改造で移植（SHA-256 一致）
+
+### M3-c supervisor（`pidfind.ts` の書き換え）
+- [x] 自分自身を除く／親が自分の親であるものだけに絞る
+- [x] 不合格 PID のキャッシュ。検査失敗は諦めない
+- [x] 3s→5s→10s→30s のバックオフ。子プロセスの集合が変わったら先頭へ戻す
+- [x] 噛んだ後は 30 秒ごとの見張り。`detached` で即座に探し直す
+
+### M3-d テスト
+- [x] `hook.test.ts` を移植（import 2 行の修正だけで 16 件通過）
+- [x] `transmit.test.ts` 17 件 / `supervisor.test.ts` 14 件 / `engineCore.test.ts` 18 件
+
+### M3-e 実機検証（Canary 1.0.1169）
+- [x] **frida が Electron 42 の utilityProcess 内で読み込める**（ABI の主張が実機で成立）
+- [x] エンジンが `searching` で待機する（VC 未参加なのでこれが正常）
+- [x] `frida_binding.node` を退避 → Discord は正常起動し、パネルに
+      **試したパスまで含めた理由**が出る。エンジンは終了せず生き残る
+- [x] 戻して再アタッチ → 新しい PID で復帰する
+- [ ] VC に入る → **何も操作せず** FAB が緑になり audio PID が出る → 要・VC 参加
+- [ ] タイルを叩くと 2 人目に聞こえる → 要・2 人目
+- [ ] audio utility を kill → 自動で再 attach → 要・VC 参加
+- [ ] engine を kill → 再起動 → 再 attach。開いていたゲートが 2 秒以内に閉じる → 要・2 人目
+
+### 途中で起きたこと
+- Canary がセッション中に 1.0.1165 → **1.0.1169 へ自動更新**され、パッチが外れた。
+  マネージャの走査が `要再適用（1.0.1165 に適用済みだった）` を正しく出した（可視化 3 の実証）
+
+## M4 以降
+
+計画ファイル参照。M4 = 旧経路との突き合わせと `.wma` のエラー表面化、
+M4.5 = Discord ネイティブ意匠への UI 作り替え、M5 = 堅牢化、
+M6 = マネージャ仕上げ、M7 = Stable 受け入れ。
 
 ## M4.5 — Discord ネイティブ意匠への UI 作り替え
 
