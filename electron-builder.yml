@@ -1,0 +1,31 @@
+# VoiceCord マネージャ（VoiceCord.exe）の配布設定。
+# ランタイムではない。適用・解除のときだけ起動するので、インストール不要の portable にする。
+appId: com.uta-a.voicecord.manager
+productName: VoiceCord Manager
+# node build.mjs が dist-manager/ にアプリ一式と package.json を置く
+directories:
+  app: dist-manager
+  output: dist
+electronVersion: 42.11.2
+asar: true
+# Discord の中で動くペイロード（patcher / preload / engine / hook / frida）。
+# frida_binding.node は bindings が実パスを辿るので asar に入れない。
+# 適用時に resources/payload から %LOCALAPPDATA%\VoiceCord\dist へコピーされる（payloadDir.ts）
+extraResources:
+  - from: payload
+    to: payload
+    filter:
+      - "**/*"
+  # electron-builder は extraResources でも node_modules を既定で落とす（実測: frida が
+  # 入らなかった）。frida の実行時依存は build.mjs の copyFrida が payload/node_modules に
+  # 揃えているので、別エントリで明示的に運ぶ
+  - from: payload/node_modules
+    to: payload/node_modules
+    filter:
+      - "**/*"
+win:
+  target:
+    - target: portable
+      arch: x64
+portable:
+  artifactName: VoiceCord-${version}-portable.exe

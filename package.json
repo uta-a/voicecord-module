@@ -9,7 +9,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "node build.mjs",
-    "manager": "npm run build && electron dist-manager/main.js"
+    "manager": "npm run build && electron dist-manager/main.js",
+    "dist:manager": "npm run build && electron-builder --config electron-builder.yml"
   },
   "devDependencies": {
     "@electron/asar": "^4.3.0",
@@ -29,6 +30,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "electron": "^42.11.2",
+    "electron-builder": "^26.15.3",
     "jsdom": "^30.0.1",
     "lucide-react": "^0.454.0",
     "postcss": "^8.4.49",

@@ -219,9 +219,25 @@ async function buildManager() {
   fs.mkdirSync(managerDir, { recursive: true })
   // ルートの package.json が type:module なので、ここに commonjs 宣言を置いて
   // dist-manager 配下の .js を CJS として読ませる
+  // electron-builder はこれをアプリの package.json として使う（electron-builder.yml）。
+  // name を旧アプリと同じ voicecord にすると、%APPDATA%\voicecord（旧設定の移行元）を
+  // マネージャの userData として共有してしまうので分ける
+  const rootPkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
   fs.writeFileSync(
     path.join(managerDir, 'package.json'),
-    JSON.stringify({ type: 'commonjs' }, null, 2) + '\n'
+    JSON.stringify(
+      {
+        name: 'voicecord-manager',
+        productName: 'VoiceCord Manager',
+        version: rootPkg.version,
+        description: 'VoiceCord のパッチ適用・解除マネージャ',
+        author: rootPkg.author,
+        main: 'main.js',
+        type: 'commonjs'
+      },
+      null,
+      2
+    ) + '\n'
   )
 
   await build({
