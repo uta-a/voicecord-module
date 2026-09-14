@@ -168,6 +168,20 @@ function applyGate(on){
 function gateOpen(){ gateForced = true; applyGate(true); }
 function gateClose(){ gateForced = false; applyGate(false); }
 
+// スクリプトが外される直前の後始末(ゲート復帰の最短経路)。
+// frida は host(VoiceCord のエンジン)が強制終了されて接続が切れたときも、
+// エージェント側でスクリプトを unload し、その直前に rpc.exports.dispose を呼ぶ
+// (2026-09-14 に frida 16.7.19 で host を taskkill /F して実測)。
+// ここで閉じないと、hook が消えた後も Discord 内部の常時送信フラグが残り、
+// 再アタッチした新しい hook が次の GetStats で閉じるまで生マイクが流れ続ける。
+// Connection* の扱いは gateClose と同じ(退出を検知したら gateConn は捨てられている)。
+rpc.exports = {
+  dispose(){
+    gateForced = false;
+    if (gateApplied) applyGate(false);
+  }
+};
+
 (function installGateHook(){
   const vm = Process.findModuleByName(VOICE_MOD);
   if (!vm){ send({ev:"error", msg:VOICE_MOD+" not loaded (gate)"}); return; }

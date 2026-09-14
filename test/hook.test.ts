@@ -20,6 +20,8 @@ interface HookMessage {
 
 interface Harness {
   messages: HookMessage[]
+  /** frida がスクリプトを外す直前に呼ぶ rpc.exports.dispose を模す。 */
+  dispose: () => void
   /** hook.js の recv("ctrl") へ制御メッセージを流す。 */
   ctrl: (msg: Record<string, unknown>) => void
   /** Krisp の 1 フレーム分(float 版)を流す。samples は [-1,1]。 */
@@ -120,13 +122,19 @@ function loadHook(): Harness {
       watchdog = fn
       return 0
     },
-    clearInterval: () => undefined
+    clearInterval: () => undefined,
+    rpc: { exports: {} as { dispose?: () => void } }
   }
 
   runInContext(HOOK_SRC, createContext(sandbox))
 
   return {
     messages,
+    dispose: () => {
+      const fn = sandbox.rpc.exports.dispose
+      if (!fn) throw new Error('rpc.exports.dispose が定義されていない')
+      fn()
+    },
     ctrl: (msg) => {
       const h = recvHandlers['ctrl']
       if (!h) throw new Error('ctrl ハンドラが登録されていない')
@@ -356,6 +364,33 @@ describe('hook.js の送信ゲート', () => {
     const before = countInfo(h)
     h.getStats(2)
     expect(countInfo(h)).toBe(before + 1)
+  })
+
+  // エンジンが強制終了されると hook ごと消える。消える前に閉じないと、再アタッチした
+  // 新しい hook が次の GetStats で閉じるまで、生マイクが流れ続ける。
+  it('スクリプトが外される直前に、開いていたゲートを閉じる', () => {
+    const h = loadHook()
+    h.getStats(1)
+    h.ctrl({ op: 'gateOpen' })
+    const pttBefore = h.ptt.length
+    h.dispose()
+    expect(h.ptt.slice(pttBefore)).toEqual([0])
+    expect(h.last('gate')!.open).toBe(false)
+  })
+
+  it('ゲートを開いていなければ、外されるときに Discord を触らない', () => {
+    const h = loadHook()
+    h.getStats(1)
+    const pttBefore = h.ptt.length
+    h.dispose()
+    expect(h.ptt.length).toBe(pttBefore)
+  })
+
+  it('接続を捕捉する前に外されても落ちない', () => {
+    const h = loadHook()
+    h.ctrl({ op: 'gateOpen' }) // まだ Connection* が無いので適用されていない
+    expect(() => h.dispose()).not.toThrow()
+    expect(h.ptt).toEqual([])
   })
 })
 
