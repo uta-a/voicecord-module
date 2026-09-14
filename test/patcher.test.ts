@@ -239,7 +239,7 @@ function deps(over: Partial<IpcDeps> = {}): IpcDeps & {
       loadWarning: null
     },
     sounds: {
-      scan: (folder) => [{ id: folder, name: `${folder}.wav`, path: folder, fp: '1_2' }],
+      scan: (folder) => [{ id: folder, name: `${folder}.wav`, path: folder, fp: '1_2', kind: 'file' }],
       read: () => new ArrayBuffer(8)
     },
     chooseFolder: async () => 'C:/picked',

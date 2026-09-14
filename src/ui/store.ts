@@ -235,7 +235,7 @@ const MOCK_SOUNDS: SoundItem[] = [
   'キラーン',
   'ドンッ',
   'わーい'
-].map((n) => ({ id: n, name: `${n}.wav`, path: `C:/sounds/${n}.wav`, fp: '0' }))
+].map((n) => ({ id: n, name: `${n}.wav`, path: `C:/sounds/${n}.wav`, fp: '0', kind: 'file' as const }))
 
 // 規約: ユーザーの操作を受けて処理を中断する早期 return は、理由が画面から自明でない限り
 // 必ず set({ status: ... }) で理由を出す。無言 return は「押したのに何も起きない」という、

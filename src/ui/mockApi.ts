@@ -44,7 +44,8 @@ const MOCK_SOUNDS: SoundItem[] = MOCK_NAMES.map((n, i) => ({
   name: `${n}.wav`,
   path: `${MOCK_FOLDER}\\${n}.wav`,
   // 内容指紋。実装では mtimeNs_size なので、それらしい形にしておく
-  fp: `mock${i}_${1000 + i * 137}`
+  fp: `mock${i}_${1000 + i * 137}`,
+  kind: 'file' as const
 }))
 
 /** 音源ごとにばらつかせた音量。校正済みの環境の見た目に近づける */

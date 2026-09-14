@@ -16,6 +16,9 @@ export interface SoundItem {
   name: string
   path: string
   fp: string // 内容指紋(mtimeNs_size)。差し替え検出とキャッシュ無効化に使う
+  // 音源の出所。今はローカルフォルダのファイルだけ。将来 Discord のサウンドボード音源を
+  // 注入するときに 'discord' を足す余地として型だけ先に分けてある(実装はしていない)。
+  kind: 'file'
 }
 
 export interface AttachResult {

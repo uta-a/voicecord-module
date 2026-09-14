@@ -102,7 +102,7 @@ export function scanFolder(fs: SoundsFs, folder: string): SoundItem[] {
       // 取れなければ既定値のまま。走査ごと落とすほどのことではない
     }
 
-    items.push({ id, name, path: path.join(folder, name), fp })
+    items.push({ id, name, path: path.join(folder, name), fp, kind: 'file' })
   }
   return items
 }
