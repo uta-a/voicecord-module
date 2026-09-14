@@ -69,6 +69,21 @@ const targets = [
       // ui.js は実行時に require する。バンドルに巻き込まない
       external: [...common.external, './ui.js']
     }
+  },
+  {
+    // メインワールドの採取役。preload が文字列で読み、webFrame.executeJavaScript で
+    // メインワールドへ流し込む。Node も electron も無い素のページで動くので iife にする。
+    // ソースマップは付けない（ページの URL 基準で .map を取りに行ってしまう）
+    name: 'harvest',
+    entry: 'src/mainworld/index.ts',
+    out: 'harvest.js',
+    options: {
+      format: 'iife',
+      platform: 'browser',
+      target: 'chrome120',
+      external: [],
+      sourcemap: false
+    }
   }
 ]
 
