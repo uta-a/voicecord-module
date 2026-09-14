@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session, utilityProcess } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, session, utilityProcess } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -7,7 +7,9 @@ import {
   defaultSoundsFolder,
   type ConfigStore
 } from '../shared/config.js'
+import { ENGINE_EMERGENCY_STOP } from '../shared/engineMsg.js'
 import { CH, type VoiceCordStatus } from '../shared/ipc.js'
+import { EMERGENCY_STOP_ACCELERATOR, registerEmergencyStop } from './emergencyStop.js'
 import { voiceCordPathsFromEnv } from '../shared/paths.js'
 import { markPatcherRun, readState, writeState } from '../shared/stateStore.js'
 import { createEngineHost, type EngineHost, type EngineProcessLike } from './engineHost.js'
@@ -149,6 +151,42 @@ function main(): void {
       }
     },
     {
+      // ゲート復帰 4 層の 4 層目。Discord にフォーカスが無くても、UI が壊れていても効く
+      name: 'hotkey',
+      run: () => {
+        const register = (): void => {
+          const r = registerEmergencyStop(globalShortcut, () => {
+            const eng = engine
+            if (eng === null) return
+            eng.request(ENGINE_EMERGENCY_STOP, []).then(
+              () =>
+                subscribers.broadcast({
+                  ev: 'log',
+                  level: 'warn',
+                  message: `緊急停止しました（${EMERGENCY_STOP_ACCELERATOR}）。再生を止め、送信ゲートを閉じました`
+                }),
+              (e: unknown) =>
+                subscribers.broadcast({
+                  ev: 'log',
+                  level: 'error',
+                  message: `緊急停止をエンジンへ届けられませんでした: ${e instanceof Error ? e.message : String(e)}`
+                })
+            )
+          })
+          if (!r.ok) {
+            // 効かない脱出口を効くと思わせない。パネルに理由を常時出す
+            status.degraded = [...status.degraded, { name: 'hotkey', error: r.error }]
+            broadcastStatus()
+            return
+          }
+          app.on('will-quit', () => globalShortcut.unregister(EMERGENCY_STOP_ACCELERATOR))
+        }
+        // globalShortcut は app が ready になるまで使えない
+        if (app.isReady()) register()
+        else void app.whenReady().then(register)
+      }
+    },
+    {
       name: 'ipc',
       run: () => {
         registerIpc(ipcMain, {
@@ -212,7 +250,8 @@ function main(): void {
 
   const outcomes = runSubsystems(subsystems, log)
   const { failures } = summarize(outcomes)
-  status.degraded = failures
+  // 上書きしない。ready 済みで起動されたときは hotkey が既に失敗を積んでいる
+  status.degraded = [...status.degraded, ...failures]
   // エンジンが起動できなかったときだけ engine を failed にする。
   // 他のサブシステムの失敗は degraded で伝える（エンジンは生きているのに
   // 赤く光ると、どこが壊れているのか読み取れなくなる）

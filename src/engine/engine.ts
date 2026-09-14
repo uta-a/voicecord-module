@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ENGINE_EMERGENCY_STOP } from '../shared/engineMsg.js'
 import type { EngineState } from '../shared/ipc.js'
 import type { EngineEvent, PlayReq } from '../shared/types.js'
 import { createEngineCore, type EngineCore } from './core.js'
@@ -166,7 +167,19 @@ const handlers: Record<string, Handler> = {
   'voicecord:setMaster': ([v]) => need().setMaster(Number(v)),
   'voicecord:openGate': ([guardMs]) => need().preOpenGate(Number(guardMs) || 1500),
   'voicecord:calibStart': ([tag, frames]) => need().calibStart(String(tag), Number(frames)),
-  'voicecord:calibStop': () => need().calibStop()
+  'voicecord:calibStop': () => need().calibStop(),
+
+  // 緊急停止（patcher の globalShortcut から）。再生の停止を待たずにゲートを閉じる。
+  // 通常の stopAll は activity=false → 1 秒の遅延を経て閉じるが、ここでは待たない。
+  // エンジンが初期化前でも失敗させない（閉じるべきゲートが無いだけ）
+  [ENGINE_EMERGENCY_STOP]: () => {
+    try {
+      core?.stopAll()
+    } catch {
+      // 噛んでいなければ止める音も無い。ゲートは下で必ず戻す
+    }
+    gate.revertNow()
+  }
 }
 
 port.on('message', (e) => {
