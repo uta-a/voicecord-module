@@ -33,6 +33,10 @@
    M4 完了後、下の M4.5-a〜g を順に実施する。Vencord 共存、テーマ追従、再挿入の暴走防止、
    アンカー不在時と FAB フォールバック時の操作を Canary で検証する。
 8. [ ] M5: ゲート復帰の 4 層とグローバル緊急停止ホットキーを仕上げる。
+   2026-09-14 実装済み（実機未検証）: hook.js の `rpc.exports.dispose` でスクリプトが外される
+   直前にゲートを閉じる（frida 16.7.19 で host の強制終了時にも dispose が走ることを実測）。
+   OS グローバルの緊急停止 `Ctrl+Alt+Shift+X`（再生停止 + 遅延なしのゲート閉鎖、
+   登録失敗は degraded でパネルに表示）。
    engine 終了処理、hook の復帰処理、Discord の before-quit、緊急停止の各経路を確認する。
    engine 強制終了・Discord 終了・再アタッチ・緊急停止で実際の送信が止まることを検証する。
    旧計画の「最長 5 秒程度」は 2 秒以内の達成証拠として扱わない。
@@ -380,16 +384,40 @@ M6 = マネージャ仕上げ、M7 = Stable 受け入れ。
 計画ファイルの「M4.5」節が正。
 
 ### M4.5-a 実測（Canary を `--remote-debugging-port` 付きで起動して CDP から採る）
+
+2026-09-14、Canary 1.0.1169（Vencord 不在、ダークテーマ、DM 通話中）で CDP から読み取り:
+- 純正のサウンドボードボタンは**チャット欄ではなく音声パネル**にある。
+  `container_e131a9 > actionButtons_e131a9` の 4 番目（カメラ / 画面共有 /
+  アクティビティ / サウンドボード）。各 78x32、r 8px、lottie アイコン 18px。
+  `aria-label="サウンドボードを開く"` はこのボタンだけ。他の 3 つは
+  `hiddenVisually` の span で名前を持つ。開いている間は `aria-expanded="true"` と
+  `greyButtonActive_e131a9` が付く
+- `expression-picker-chat-input-button` は 3 個あるがチャット欄側のもので、
+  サウンドボードボタンには付いていない（計画の 2 段目の前提は外れた）
+- 純正ポップアウト `picker__09f65`（role=dialog）: 531x520、r 8px、
+  shadow = `--shadow-border` + `--shadow-high`。上にヘッダ 64px（検索 40px 高、
+  placeholder「完璧な音を見つけよう」、右に音量の歯車）、左にカテゴリ列 48px、
+  セクション見出し 32px（14px / 600）、タイルは 148x40 / r 8px / gap 8px、
+  行は padding 0 0 8px 8px。タイルは絵文字 + 名前、ホバーでプレビューと
+  お気に入りのボタンが重なる。詳細な骨格は DEV-NOTES.md
+- テーマ変数は新体系。`--background-primary` / `--background-secondary` /
+  `--text-normal` / `--interactive-normal` は**空**。実在するのは
+  `--background-base-low/lower/lowest`、`--background-surface-high/higher/highest`、
+  `--text-default/muted/strong`、`--border-subtle/normal/strong`、
+  `--interactive-*`、`--control-*`、`--icon-*`、`--radius-xs〜xxl`、
+  `--shadow-high`、`--shadow-border`
+- `window.webpackChunkdiscord_app` は存在、`window.Vencord` は不在
+
 - [ ] preload の `webFrame.executeJavaScript` が実 CSP 下で通るか
       ※ ワールドは Electron v42.11.2 のソースで確定済み（`kMainWorldId` を明示的に渡す）。
         CSP をすり抜ける点は公式の明文が無いが、Vencord が Stable で現に動いているのが実証。
       → 否なら `webContents.debugger` の `Page.addScriptToEvaluateOnNewDocument`、
         それも駄目なら採取役ごと削り、発見連鎖の 2 段目以降で運用する
 - [ ] `webpackChunkdiscord_app.push` で `__webpack_require__` を受け取れるか
-- [ ] サウンドボードボタンの DOM 位置・`aria-label` の実文言・親コンテナ
-- [ ] `expression-picker-chat-input-button` が実際に付いているか
-- [ ] 純正ポップアウトの寸法・余白・角丸・影・タイルのサイズと段組み
-- [ ] Discord のテーマ変数の実名（`--background-primary` 系か新しい系か）とライト/ダークの値
+- [x] サウンドボードボタンの DOM 位置・`aria-label` の実文言・親コンテナ
+- [x] `expression-picker-chat-input-button` が実際に付いているか（付いていない）
+- [x] 純正ポップアウトの寸法・余白・角丸・影・タイルのサイズと段組み
+- [ ] Discord のテーマ変数の実名（新体系と確認）とライト/ダークの値（ダークのみ採取）
 
 ### M4.5-b メインワールドの採取役（`src/mainworld/harvest.ts`）
 - [ ] 読み取り専用。`window.api` も IPC も渡さない

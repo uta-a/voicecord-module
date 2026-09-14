@@ -78,6 +78,50 @@ ffmpeg で 1 秒の 440 Hz 正弦波を実 WMAv2 ファイルとして生成し�
 - 検証ファイルを削除し、一覧再読込で検証タイルも消えた。
 - 詳細な時系列は TASKS.md。既存の mock decoder テストだけの結果と混同しない。
 
+## M4.5 の実測（純正サウンドボード）
+
+対象: Canary 1.0.1169 / ダークテーマ / Vencord 不在 / DM 通話中。2026-09-14 に CDP で読み取り。
+ハッシュ付きのクラス名はビルドごとに変わる。構造と寸法の参考にだけ使い、クラス名を決め打ちしない。
+
+ボタン（音声パネル）:
+
+```
+div.container_e131a9
+  div.actionButtons_e131a9            334x32（4 ボタンを横に並べる）
+    button  78x32  カメラ              名前は直後の span.hiddenVisually
+    button  78x32  画面共有
+    button  78x32  アクティビティ
+    button  78x32  aria-label="サウンドボードを開く"  aria-expanded / aria-controls=popout_N
+      div.contents__201d5 buttonContents_e131a9
+        div.lottieIcon__5eb9b  18x18（lottie の SVG）
+```
+
+ボタンの見た目: padding 7px 15px、r 8px、bg `rgba(151,151,159,0.2)`、
+border 1px（ほぼ透明）、font 16px / 500。開いている間だけ `greyButtonActive_e131a9` が付く。
+
+ポップアウト:
+
+```
+div.picker__09f65 role=dialog         531x520  r 8px  overflow hidden
+                                       shadow: 0 0 0 1px rgba(255,255,255,.08), 0 12px 24px rgba(0,0,0,.24)
+  div.header__0856d                    531x64   padding 12px  下辺に elevation-low 相当の影
+    検索入力                            471x40   r 8px  bg rgba(0,0,0,.12)  先頭に 16px の虫眼鏡
+                                        placeholder「完璧な音を見つけよう」
+    歯車 [サウンドボードの音量]          24x24
+  div.categoryList                     48x455   bg はポップアウトより一段暗い  左下だけ r 8px
+    カテゴリ 32x32 / padding 4px / r 4px（選択中はポップアウト本体の色）
+  div.listWrapper role=grid            483x456  縦スクロール（thin）
+    セクション見出し                    475x32   padding 0 4px 0 8px  見出し 14px / 600 / muted
+    ul.soundRow role=row               gap 8px  padding 0 0 8px 8px
+      li.soundButtonWrapper            148x40   r 8px
+        div.soundButton                bg rgba(151,151,159,.12)  border 1px 透明
+          div.soundInfo                padding 8px  gap 8px  絵文字 + 名前（text-xs/medium）
+          div.buttonOverlay            ホバーでプレビュー / お気に入り
+```
+
+計測した色（oklab）: ポップアウト本体 0.2452、カテゴリ列とタイルの下地 0.2195。
+変数の対応はライトテーマで未確認。
+
 ## CDP + Playwright MCP の接続メモ
 
 - Canary を `--remote-debugging-address=127.0.0.1 --remote-debugging-port=9223` 付きで起動する。
