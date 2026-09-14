@@ -59,6 +59,25 @@ export interface Graft {
   state(): GraftState
 }
 
+/**
+ * ボタンを並べる位置の基準になる要素。
+ *
+ * 実機の純正ボタンは、ツールチップ用の無名 div に 1 つだけ包まれている（Canary 1.0.1169）。
+ * 包みの中に差し込むと横に並ばず、純正の下に縦に積まれる。アンカーから上へ、
+ * 「自分（と接ぎ木したボタン）しか子を持たない親」を辿り、ボタン列の直下の要素を返す。
+ */
+export function slotOf(anchor: HTMLElement, graft: HTMLElement | null): HTMLElement {
+  let el = anchor
+  for (let depth = 0; depth < 4; depth++) {
+    const parent = el.parentElement
+    if (parent === null || parent === el.ownerDocument.body) break
+    const others = Array.from(parent.children).filter((c) => c !== el && c !== graft)
+    if (others.length > 0) break
+    el = parent
+  }
+  return el
+}
+
 export const MAX_INSERTS_PER_WINDOW = 10
 export const INSERT_WINDOW_MS = 1000
 /** 諦めてから再試行するまで。再試行は 1 回だけ（取り合いが続くなら FAB のまま） */
@@ -155,7 +174,12 @@ export function createGraft(deps: GraftDeps): Graft {
     if (stopped || tripped) return
 
     // 接ぎ木できていて、純正ボタンがまだ DOM にあり、隣にいるなら探し直さない
-    if (!force && button?.isConnected && anchor?.isConnected && button.previousElementSibling === anchor) {
+    if (
+      !force &&
+      button?.isConnected &&
+      anchor?.isConnected &&
+      button.previousElementSibling === slotOf(anchor, button)
+    ) {
       deps.refresh(button, anchor)
       emit()
       return
@@ -175,7 +199,8 @@ export function createGraft(deps: GraftDeps): Graft {
     if (button === null) button = deps.build(hit.anchor)
     else deps.refresh(button, hit.anchor)
 
-    if (button.isConnected && button.previousElementSibling === hit.anchor) {
+    const slot = slotOf(hit.anchor, button)
+    if (button.isConnected && button.previousElementSibling === slot) {
       emit()
       return
     }
@@ -189,7 +214,7 @@ export function createGraft(deps: GraftDeps): Graft {
     }
     recent.push(t)
     inserts += 1
-    hit.anchor.after(button)
+    slot.after(button)
     emit()
   }
 

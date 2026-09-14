@@ -84,6 +84,29 @@ describe('buildGraftButton', () => {
     expect(b.textContent).toBe('')
   })
 
+  // 回帰: 実機（Canary 1.0.1169）の純正ボタンは、ツールチップ用の無名 div に 1 つだけ
+  // 包まれている。包みの中へ差し込むと、ボタンが横に並ばず純正の下に縦に積まれた
+  it('純正ボタンが単独の包みに入っていれば、包みの外（ボタン列の直下）に並べる', () => {
+    document.body.innerHTML = `<div class="container_e131a9"><div class="actionButtons_e131a9">
+      <button class="button_e131a9"></button><span class="hiddenVisually_b18fe2">カメラ</span>
+      <button class="button_e131a9"></button><span class="hiddenVisually_b18fe2">画面</span>
+      <button class="button_e131a9"></button><span class="hiddenVisually_b18fe2">アクティビティ</span>
+      <div><button class="button_e131a9" aria-label="サウンドボードを開く"><div class="contents__201d5"><div class="lottieIcon__5eb9b"><svg></svg></div></div></button></div>
+    </div></div>`
+    const h = harness()
+    h.graft.start()
+    const row = document.querySelector('.actionButtons_e131a9')!
+    const btn = document.querySelector(`[${GRAFT_ATTR}]`)!
+    expect(btn.parentElement).toBe(row)
+    expect(btn.previousElementSibling?.querySelector('[aria-label="サウンドボードを開く"]')).not.toBeNull()
+    // 揃った後の同期では挿入し直さない（隣接の判定も包み基準）
+    const inserts = h.graft.state().inserts
+    h.graft.sync(false)
+    expect(h.graft.state().inserts).toBe(inserts)
+    // 止めないと observer が残り、後続のテストの DOM に挿し込んでしまう
+    h.graft.stop()
+  })
+
   it('stripStateTokens は active を含むクラスだけ外す', () => {
     expect(stripStateTokens('a_1 greyButtonActive_x b_2')).toBe('a_1 b_2')
   })
