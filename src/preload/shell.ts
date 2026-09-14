@@ -1,15 +1,20 @@
 import type { EngineState, VoiceCordStatus } from '../shared/ipc.js'
+import { DOT_LABEL, statusProblems } from '../shared/status.js'
+
+export { DOT_LABEL, statusProblems }
 
 /**
  * Discord の画面に生やす器。
  *
- * Discord の DOM には接ぎ木しない。クラス名はビルドごとにハッシュが変わるうえ、
- * React の再レンダリングで我々のノードが外される。document.body 直下に
- * フローティングで置けば Discord の内部構造から完全に独立できる。
+ * M4.5 で VoiceCord の入口は「純正サウンドボードボタンの隣に接ぎ木したボタン」になり、
+ * 中身は Discord のサウンドボードと同じ意匠のポップアウト（React、Radix Popover）になった。
+ * 器に残るのは次の 4 つだけ。
  *
- * FAB はエンジンの状態から独立して無条件に出す。パッチが当たっていれば必ず出て、
- * 外れていれば何も出ない ＝ FAB の在／不在がそのままパッチ状態になる（可視化 1）。
- * エンジンが死んでいても FAB は出て、色で異常を示し、開けば理由が読める（可視化 2）。
+ *   - #vc-root: スタイルのスコープと、ポップアウト／ダイアログの Portal の行き先
+ *   - FAB: **故障したときだけ**出す予備の入口（presence.ts が判定する）。平常時に出すと
+ *     VC 全画面の「ポップアウト」ボタンなど Discord の操作を塞ぐ
+ *   - 診断の箱: UI 自体が読み込めなかったとき、FAB から理由を読むための最小限の表示
+ *   - ツールチップ: 接ぎ木したボタンの「VoiceCord」。純正と同じ意匠で、区別はここだけ
  */
 
 export const ROOT_ID = 'vc-root'
@@ -28,28 +33,22 @@ export const DOT_COLOR: Record<EngineState, string> = {
   failed: '#ed4245'
 }
 
-export const DOT_LABEL: Record<EngineState, string> = {
-  starting: '起動中',
-  searching: 'エンジン生存・音声プロセス未検出',
-  attached: 'アタッチ済み',
-  failed: 'エンジンが動いていません'
-}
-
 /**
- * 器のスタイル。Tailwind の出力（M1-e）とは別に、器そのものだけを賄う。
+ * 器のスタイル。Tailwind の出力とは別に、器そのものだけを賄う。
  * すべて #vc-root 配下に閉じ込め、Discord 側へ漏らさない。
+ * 色は Discord のテーマ変数を参照し、全てにフォールバック値を持たせる
+ * （Discord が変数名を変えても無色にならない）。
  */
 export const SHELL_CSS = `
 #${ROOT_ID} {
   position: fixed;
   inset: 0;
   z-index: 2147483000;
-  /* 閉じているときにクリックを吸わない。中身だけが受け取る */
+  /* クリックを吸わない。中身だけが受け取る */
   pointer-events: none;
-  color-scheme: dark;
 }
 #${ROOT_ID} .vc-fab,
-#${ROOT_ID} .vc-panel,
+#${ROOT_ID} .vc-diag,
 #${ROOT_ID} .${PORTAL_CLASS} {
   pointer-events: auto;
 }
@@ -60,14 +59,15 @@ export const SHELL_CSS = `
   gap: 8px;
   padding: 8px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: #1e1f22;
-  color: #dbdee1;
-  font: 500 13px/1 system-ui, sans-serif;
+  border: 1px solid var(--border-subtle, rgba(151, 151, 159, 0.12));
+  background: var(--background-surface-high, #242429);
+  color: var(--text-default, #dbdee1);
+  font: 500 13px/1 var(--font-primary, "gg sans", "Noto Sans", sans-serif);
   cursor: grab;
   user-select: none;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-high, 0 12px 24px 0 rgba(0, 0, 0, 0.24));
 }
+#${ROOT_ID} .vc-fab[hidden] { display: none; }
 #${ROOT_ID} .vc-fab:active { cursor: grabbing; }
 #${ROOT_ID} .vc-dot {
   width: 8px;
@@ -76,74 +76,31 @@ export const SHELL_CSS = `
   background: ${DOT_COLOR.starting};
   flex: none;
 }
-#${ROOT_ID} .vc-panel {
+#${ROOT_ID} .vc-diag {
   position: absolute;
   display: none;
-  flex-direction: column;
-  /* 既定のサイズを持たせる。position:absolute の shrink-to-fit のままだと高さが
-     内容依存になり、中の UI の h-full / flex-1 が解決できず縦につぶれる */
-  width: min(1000px, calc(100vw - 32px));
-  height: min(640px, calc(100vh - 32px));
-  min-width: 360px;
-  min-height: 240px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: #313338;
-  color: #dbdee1;
-  font: 400 14px/1.5 system-ui, sans-serif;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
-  overflow: hidden;
-  resize: both;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--background-surface-high, #242429);
+  color: var(--text-default, #dbdee1);
+  font: 400 14px/1.5 var(--font-primary, "gg sans", "Noto Sans", sans-serif);
+  box-shadow: var(--shadow-border, 0 0 0 1px rgba(255, 255, 255, 0.08)), var(--shadow-high, 0 12px 24px 0 rgba(0, 0, 0, 0.24));
 }
-#${ROOT_ID} .vc-panel[data-open="true"] { display: flex; }
-#${ROOT_ID} .vc-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  background: #2b2d31;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  cursor: grab;
-  user-select: none;
-  font-weight: 600;
+#${ROOT_ID} .vc-diag[data-open="true"] { display: block; }
+#${ROOT_ID} .vc-reason {
+  margin: 0 0 8px;
+  font-size: 13px;
 }
-#${ROOT_ID} .vc-head:active { cursor: grabbing; }
-#${ROOT_ID} .vc-spacer { flex: 1; }
-#${ROOT_ID} .vc-close {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-#${ROOT_ID} .vc-close:hover { background: rgba(255, 255, 255, 0.08); }
-#${ROOT_ID} .vc-status {
-  flex: none;
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-#${ROOT_ID} .vc-body {
-  flex: 1;
-  /* React がここを丸ごと持つ。スクロールは中の UI に任せる */
-  overflow: hidden;
-  min-height: 0;
-  /* 移植元の body の塗り。#vc-root には絶対に置かないこと。#vc-root は
-     position:fixed / inset:0 の全画面オーバーレイなので、不透明な塗りを
-     当てると Discord 全体を覆い隠す。pointer-events:none でクリックは
-     透過するため「操作はできるのに画面が真っ黒」という分かりにくい
-     壊れ方をする（実機で踏んだ）。--background は UI の CSS が
-     #vc-root に定義するので、未読込なら透明になりパネルの色が出る。 */
-  background: hsl(var(--background));
-}
+#${ROOT_ID} .vc-reason:empty { display: none; }
 #${ROOT_ID} .vc-kv {
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: 4px 12px;
+  margin: 0;
   font-size: 13px;
 }
-#${ROOT_ID} .vc-kv dt { color: #949ba4; }
+#${ROOT_ID} .vc-kv dt { color: var(--text-muted, #949ba4); }
 #${ROOT_ID} .vc-kv dd { margin: 0; word-break: break-all; }
 #${ROOT_ID} .vc-error {
   margin-top: 12px;
@@ -154,6 +111,19 @@ export const SHELL_CSS = `
   font-size: 13px;
   white-space: pre-wrap;
 }
+#${ROOT_ID} .vc-tip {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 8px));
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--background-surface-highest, #2e2e34);
+  color: var(--text-strong, #fbfbfb);
+  font: 500 14px/16px var(--font-primary, "gg sans", "Noto Sans", sans-serif);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shadow-border, 0 0 0 1px rgba(255, 255, 255, 0.08)), var(--shadow-high, 0 12px 24px 0 rgba(0, 0, 0, 0.24));
+}
+#${ROOT_ID} .vc-tip[hidden] { display: none; }
 `
 
 export interface Point {
@@ -175,15 +145,24 @@ export interface Shell {
   root: HTMLElement
   /** React のマウント先。ここは React だけが触る */
   body: HTMLElement
-  /** Radix の Portal（ダイアログ・ポップオーバー・セレクト）の行き先 */
+  /** Radix の Portal（ポップアウト・ダイアログ・セレクト）の行き先 */
   portal: HTMLElement
+  /** 予備の入口。ポップアウトのアンカーにもなる */
+  fab: HTMLElement
   /** DOM に入れたあとに呼ぶ。実寸が測れて初めて決まる位置を詰める */
   settle: () => void
+  /** 診断の箱（UI が読み込めなかったとき用） */
   isOpen: () => boolean
   open: () => void
   close: () => void
   toggle: () => void
   setStatus: (s: VoiceCordStatus) => void
+  /** FAB の表示。reason は FAB と診断の箱に出す */
+  setFab: (visible: boolean, reason: string | null) => void
+  /** FAB が押されたとき（ドラッグではなくクリック）。未設定なら診断の箱を開閉する */
+  onFabClick: (cb: (() => void) | null) => void
+  showTip: (target: Element, text: string) => void
+  hideTip: () => void
   destroy: () => void
 }
 
@@ -191,9 +170,7 @@ export interface ShellOptions {
   doc: Document
   /** FAB の初期位置。無ければ右下（Discord のユーザーパネルを避ける） */
   fabPos?: Point
-  /** パネルの初期位置 */
-  panelPos?: Point
-  onMove?: (what: 'fab' | 'panel', p: Point) => void
+  onMove?: (p: Point) => void
 }
 
 export function createShell(opts: ShellOptions): Shell {
@@ -211,58 +188,60 @@ export function createShell(opts: ShellOptions): Shell {
   fabLabel.textContent = 'VoiceCord'
   fab.append(dot, fabLabel)
 
-  const panel = doc.createElement('div')
-  panel.className = 'vc-panel'
-  panel.dataset['open'] = 'false'
-  const head = doc.createElement('div')
-  head.className = 'vc-head'
-  const title = doc.createElement('span')
-  title.textContent = 'VoiceCord'
-  const spacer = doc.createElement('span')
-  spacer.className = 'vc-spacer'
-  const close = doc.createElement('button')
-  close.className = 'vc-close'
-  close.textContent = '×'
-  close.setAttribute('aria-label', '閉じる')
-  head.append(title, spacer, close)
-  // エンジンの状態は React とは別の場所に出す。同じ要素を両方が書き換えると、
-  // setStatus の replaceChildren が React のマウント先を消してしまう
+  const diag = doc.createElement('div')
+  diag.className = 'vc-diag'
+  diag.dataset['open'] = 'false'
+  const reason = doc.createElement('p')
+  reason.className = 'vc-reason'
   const status = doc.createElement('div')
   status.className = 'vc-status'
+  diag.append(reason, status)
+
+  // React のマウント先。ポップアウトもダイアログも Portal で .vc-portal に出るので、
+  // ここ自体は大きさを持たない
   const body = doc.createElement('div')
   body.className = 'vc-body'
-  panel.append(head, status, body)
 
-  // パネルより後ろに置く。位置指定済みの兄弟どうしは DOM 順で重なるので、
-  // ダイアログやポップオーバーがパネルの下に潜らない
+  const tip = doc.createElement('div')
+  tip.className = 'vc-tip'
+  tip.setAttribute('role', 'tooltip')
+  tip.hidden = true
+
+  // 最後に置く。位置指定済みの兄弟どうしは DOM 順で重なるので、ポップアウトや
+  // ダイアログが FAB や診断の箱の下に潜らない
   const portal = doc.createElement('div')
   portal.className = PORTAL_CLASS
 
-  root.append(fab, panel, portal)
+  root.append(fab, diag, body, tip, portal)
 
-  // 既定は右下。左下には Discord のユーザーパネル（マイク・スピーカー・設定）が
-  // あり、そこへ重ねるとミュート操作を塞いでしまう。
-  // 幅は DOM に入るまで測れないので、いったん端へ置いて settle() で詰める。
   const vp = viewportOf(doc)
-  const fabPos = opts.fabPos ?? { x: vp.x, y: vp.y }
-  const panelPos = opts.panelPos ?? { x: 80, y: 80 }
-  place(fab, fabPos)
-  place(panel, panelPos)
+  place(fab, opts.fabPos ?? { x: vp.x, y: vp.y })
+
+  let fabClick: (() => void) | null = null
 
   const setOpen = (open: boolean): void => {
-    panel.dataset['open'] = String(open)
-    if (open) keepInView(panel, doc)
+    diag.dataset['open'] = String(open)
+    if (open) {
+      const r = fab.getBoundingClientRect()
+      place(diag, { x: Math.max(8, r.left - 200), y: Math.max(8, r.top - 220) })
+      keepInView(diag, doc)
+    }
   }
-  const isOpen = (): boolean => panel.dataset['open'] === 'true'
+  const isOpen = (): boolean => diag.dataset['open'] === 'true'
 
-  // ドラッグ移動。クリックとドラッグを取り違えないよう、
-  // しきい値を超えて初めてドラッグ扱いにする
-  const stopFabDrag = makeDraggable(fab, fab, doc, (p) => opts.onMove?.('fab', p), () => {
-    setOpen(!isOpen())
+  const stopFabDrag = makeDraggable(fab, fab, doc, opts.onMove, () => {
+    if (fabClick) fabClick()
+    else setOpen(!isOpen())
   })
-  const stopPanelDrag = makeDraggable(panel, head, doc, (p) => opts.onMove?.('panel', p))
+  const onFabKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    if (fabClick) fabClick()
+    else setOpen(!isOpen())
+  }
+  fab.addEventListener('keydown', onFabKey)
 
-  close.addEventListener('click', () => setOpen(false))
+  let reasonText: string | null = null
 
   const setStatus = (s: VoiceCordStatus): void => {
     dot.style.background = DOT_COLOR[s.engine]
@@ -271,10 +250,9 @@ export function createShell(opts: ShellOptions): Shell {
     // node.mojom.NodeService を持っていて、コマンドラインでは区別できない
     fab.title =
       `VoiceCord — ${label}\n${s.discordBuild} ${s.discordVersion}` +
+      (reasonText ? `\n${reasonText}` : '') +
       (s.attachedPid !== null ? `\naudio PID ${s.attachedPid}` : '') +
       (s.enginePid !== null ? `\nengine PID ${s.enginePid}` : '') +
-      // パネルの状態表は正常時に隠れるので、常に見えるここにも出す。
-      // レートがズレていても音でしか分からないのでは切り分けられない
       (s.sampleRate !== null
         ? `\n注入レート ${s.sampleRate} Hz（${s.frameSamples ?? '?'} サンプル）`
         : `\n注入レート 未計測`)
@@ -285,8 +263,8 @@ export function createShell(opts: ShellOptions): Shell {
     root,
     body,
     portal,
+    fab,
     settle: () => {
-      // 既定位置を使っているときだけ詰める。ユーザーが動かした位置は動かさない
       if (opts.fabPos) return
       keepInView(fab, doc, FAB_MARGIN_PX)
     },
@@ -295,9 +273,28 @@ export function createShell(opts: ShellOptions): Shell {
     close: () => setOpen(false),
     toggle: () => setOpen(!isOpen()),
     setStatus,
+    setFab: (visible, text) => {
+      fab.hidden = !visible
+      reasonText = text
+      reason.textContent = text ?? ''
+      if (!visible) setOpen(false)
+    },
+    onFabClick: (cb) => {
+      fabClick = cb
+    },
+    showTip: (target, text) => {
+      const r = target.getBoundingClientRect()
+      tip.textContent = text
+      tip.style.left = `${r.left + r.width / 2}px`
+      tip.style.top = `${r.top}px`
+      tip.hidden = false
+    },
+    hideTip: () => {
+      tip.hidden = true
+    },
     destroy: () => {
       stopFabDrag()
-      stopPanelDrag()
+      fab.removeEventListener('keydown', onFabKey)
       root.remove()
     }
   }
@@ -306,13 +303,9 @@ export function createShell(opts: ShellOptions): Shell {
 function renderStatus(doc: Document, body: HTMLElement, s: VoiceCordStatus): void {
   body.replaceChildren()
 
-  // 正常に動いているときは何も出さない。常時 3 行の診断を出すと、その分だけ
-  // サウンドボードの領域が減り続ける。平常時のシグナルは FAB の色とツールチップに
-  // 任せ、パネルは「何かおかしいときに理由が読める場所」に徹する。
-  const problems = [
-    ...(s.lastError ? [s.lastError] : []),
-    ...s.degraded.map((d) => `${d.name}: ${d.error}`)
-  ]
+  // 正常に動いているときは何も出さない。平常時のシグナルはポップアウトの状態欄に任せ、
+  // ここは「何かおかしいときに理由が読める場所」に徹する
+  const problems = statusProblems(s)
   const healthy = s.engine === 'attached' && problems.length === 0
   body.hidden = healthy
   if (healthy) return
@@ -323,11 +316,7 @@ function renderStatus(doc: Document, body: HTMLElement, s: VoiceCordStatus): voi
     ['状態', DOT_LABEL[s.engine]],
     ['ビルド', `${s.discordBuild} ${s.discordVersion}`],
     ['音声プロセス', s.attachedPid === null ? '未検出' : String(s.attachedPid)],
-    // どのプロセスを見ればいいかが分からないと、エンジンだけを落として
-    // 復帰を確かめる、といった切り分けができない
     ['エンジン', s.enginePid === null ? '起動していません' : `PID ${s.enginePid}`],
-    // レートが想定と違うと「遅くて低い音が鳴る」だけで、原因が分からない。
-    // 実測値をそのまま出す
     [
       '注入レート',
       s.sampleRate === null
@@ -394,7 +383,6 @@ function makeDraggable(
   let moved = false
 
   const onDown = (e: PointerEvent): void => {
-    // リサイズハンドルや閉じるボタンの上では掴まない
     if (e.button !== 0) return
     if (e.target instanceof Element && e.target.closest('button')) return
     const rect = target.getBoundingClientRect()

@@ -6,10 +6,11 @@ import {
   DOT_COLOR,
   PORTAL_CLASS,
   ROOT_ID,
-  SHELL_CSS
+  SHELL_CSS,
+  statusProblems
 } from '../src/preload/shell.js'
 import { portalContainer } from '../src/ui/portal.js'
-import { containKeyboard, DEFAULT_HOTKEY, matchesHotkey } from '../src/preload/keyboard.js'
+import { containKeyboard, escapeAction, hasOpenLayer } from '../src/preload/keyboard.js'
 import { injectStyles, type DocumentLike } from '../src/preload/styles.js'
 import { createApi, isVoiceCordEvent, type IpcRendererLike } from '../src/preload/api.js'
 import { CH, type VoiceCordStatus } from '../src/shared/ipc.js'
@@ -37,32 +38,8 @@ describe('clampToViewport', () => {
   })
 })
 
-describe('matchesHotkey', () => {
-  const base = { ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: 'KeyB' }
-
-  it('既定は Ctrl+Shift+B', () => {
-    expect(matchesHotkey(base, DEFAULT_HOTKEY)).toBe(true)
-  })
-
-  it('修飾キーが違えば一致しない', () => {
-    expect(matchesHotkey({ ...base, altKey: true }, DEFAULT_HOTKEY)).toBe(false)
-    expect(matchesHotkey({ ...base, shiftKey: false }, DEFAULT_HOTKEY)).toBe(false)
-    expect(matchesHotkey({ ...base, metaKey: true }, DEFAULT_HOTKEY)).toBe(false)
-  })
-
-  it('オートリピートは無視する', () => {
-    expect(matchesHotkey({ ...base, repeat: true }, DEFAULT_HOTKEY)).toBe(false)
-  })
-
-  it('key ではなく code で見る（配列や IME に左右されない）', () => {
-    // key が 'い' でも code が KeyB なら一致する
-    expect(matchesHotkey({ ...base, code: 'KeyB' }, DEFAULT_HOTKEY)).toBe(true)
-    expect(matchesHotkey({ ...base, code: 'KeyV' }, DEFAULT_HOTKEY)).toBe(false)
-  })
-})
-
 describe('containKeyboard', () => {
-  it('パネルが開いていて中にフォーカスがあるとき、Discord まで届かせない', () => {
+  it('ポップアウトが開いていて中にフォーカスがあるとき、Discord まで届かせない', () => {
     const doc = document
     const root = doc.createElement('div')
     const input = doc.createElement('input')
@@ -79,7 +56,7 @@ describe('containKeyboard', () => {
     stop()
   })
 
-  it('パネルが閉じているときは素通しする', () => {
+  it('閉じているときは素通しする', () => {
     const doc = document
     const root = doc.createElement('div')
     const input = doc.createElement('input')
@@ -127,6 +104,80 @@ describe('containKeyboard', () => {
   })
 })
 
+describe('hasOpenLayer', () => {
+  it('#vc-root 内に開いた dialog / popover content があれば true', () => {
+    const root = document.createElement('div')
+    expect(hasOpenLayer(root)).toBe(false)
+    root.innerHTML = '<div role="dialog" data-state="closed"></div>'
+    expect(hasOpenLayer(root)).toBe(false)
+    // LevelDialog など、ポップアウトとは別の Radix Dialog
+    root.innerHTML = '<div role="dialog" data-state="open"></div>'
+    expect(hasOpenLayer(root)).toBe(true)
+    // Select や Popover の中身（Popper のラッパー）
+    root.innerHTML = '<div data-radix-popper-content-wrapper=""><div role="listbox"></div></div>'
+    expect(hasOpenLayer(root)).toBe(true)
+  })
+})
+
+describe('escapeAction', () => {
+  function tree(): { root: HTMLElement; popout: HTMLElement; nested: HTMLElement; outside: HTMLElement } {
+    document.body.innerHTML = ''
+    const root = document.createElement('div')
+    root.innerHTML =
+      '<div data-radix-popper-content-wrapper=""><div role="dialog" data-state="open" class="vc-popout"><input id="search"></div></div>' +
+      '<div data-radix-popper-content-wrapper=""><div role="dialog" data-state="open"><input id="vol"></div></div>' +
+      '<div role="dialog" data-state="open"><button id="dlg"></button></div>'
+    const outside = document.createElement('input')
+    document.body.append(root, outside)
+    return {
+      root,
+      popout: root.querySelector<HTMLElement>('#search')!,
+      nested: root.querySelector<HTMLElement>('#vol')!,
+      outside
+    }
+  }
+
+  it('ポップアウト本体にフォーカスがあれば閉じる', () => {
+    const t = tree()
+    expect(escapeAction({ active: t.popout, root: t.root, popoutOpen: true, diagOpen: false })).toBe('close-popout')
+  })
+
+  it('入れ子のレイヤー（別の Popover や Dialog）にフォーカスがあれば Radix に任せる', () => {
+    const t = tree()
+    expect(escapeAction({ active: t.nested, root: t.root, popoutOpen: true, diagOpen: false })).toBe('pass')
+    expect(
+      escapeAction({ active: t.root.querySelector('#dlg'), root: t.root, popoutOpen: true, diagOpen: false })
+    ).toBe('pass')
+  })
+
+  it('UI の外にフォーカスがあってもポップアウトが開いていれば閉じ、何も開いていなければ素通し', () => {
+    const t = tree()
+    expect(escapeAction({ active: t.outside, root: t.root, popoutOpen: true, diagOpen: false })).toBe('close-popout')
+    expect(escapeAction({ active: t.outside, root: t.root, popoutOpen: false, diagOpen: true })).toBe('close-diag')
+    expect(escapeAction({ active: t.outside, root: t.root, popoutOpen: false, diagOpen: false })).toBe('pass')
+  })
+})
+
+describe('containKeyboard の素通し', () => {
+  it('passThrough が true を返したキーは止めない（入れ子のレイヤーの Esc を Radix に届ける）', () => {
+    const root = document.createElement('div')
+    const input = document.createElement('input')
+    root.appendChild(input)
+    document.body.appendChild(root)
+    const heard: string[] = []
+    const stop = containKeyboard(document, {
+      root,
+      isOpen: () => true,
+      passThrough: (e) => (e as KeyboardEvent).code === 'Escape'
+    })
+    document.addEventListener('keydown', (e) => heard.push(e.code), true)
+    input.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape', bubbles: true }))
+    input.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyA', bubbles: true }))
+    expect(heard).toEqual(['Escape'])
+    stop()
+  })
+})
+
 describe('injectStyles', () => {
   it('adoptedStyleSheets が使えるならそれを使い、既存を消さない', () => {
     const existing = {} as CSSStyleSheet
@@ -159,21 +210,71 @@ describe('injectStyles', () => {
 })
 
 describe('createShell', () => {
-  it('FAB とパネルを作り、既定では閉じている', () => {
+  it('FAB と診断の箱を作り、既定では閉じている', () => {
     const shell = createShell({ doc: document })
     expect(shell.root.id).toBe(ROOT_ID)
-    expect(shell.root.querySelector('.vc-fab')).not.toBeNull()
+    expect(shell.root.querySelector('.vc-fab')).toBe(shell.fab)
+    expect(shell.root.querySelector('.vc-diag')).not.toBeNull()
     expect(shell.isOpen()).toBe(false)
     shell.destroy()
   })
 
-  it('開閉できる', () => {
+  it('旧フローティングパネルは持たない（M4.5 でポップアウトへ置き換えた）', () => {
+    const shell = createShell({ doc: document })
+    expect(shell.root.querySelector('.vc-panel')).toBeNull()
+    expect(SHELL_CSS).not.toContain('.vc-panel')
+    shell.destroy()
+  })
+
+  it('診断の箱を開閉できる', () => {
     const shell = createShell({ doc: document })
     document.body.appendChild(shell.root)
     shell.open()
     expect(shell.isOpen()).toBe(true)
     shell.toggle()
     expect(shell.isOpen()).toBe(false)
+    shell.destroy()
+  })
+
+  it('FAB の表示を切り替え、隠すと診断の箱も閉じる', () => {
+    const shell = createShell({ doc: document })
+    document.body.appendChild(shell.root)
+    shell.setFab(true, '理由')
+    expect(shell.fab.hidden).toBe(false)
+    expect(shell.root.querySelector('.vc-reason')?.textContent).toBe('理由')
+    shell.open()
+    shell.setFab(false, null)
+    expect(shell.fab.hidden).toBe(true)
+    expect(shell.isOpen()).toBe(false)
+    // [hidden] を display:flex で潰さない
+    expect(SHELL_CSS).toContain('.vc-fab[hidden] { display: none; }')
+    shell.destroy()
+  })
+
+  it('FAB のクリック先を差し替えられる（未設定なら診断の箱）', () => {
+    const shell = createShell({ doc: document })
+    document.body.appendChild(shell.root)
+    const clicked = vi.fn()
+    shell.onFabClick(clicked)
+    shell.fab.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(clicked).toHaveBeenCalledTimes(1)
+    shell.onFabClick(null)
+    shell.fab.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(shell.isOpen()).toBe(true)
+    shell.destroy()
+  })
+
+  it('ツールチップを出して消せる', () => {
+    const shell = createShell({ doc: document })
+    document.body.appendChild(shell.root)
+    const target = document.createElement('button')
+    document.body.appendChild(target)
+    shell.showTip(target, 'VoiceCord')
+    const tip = shell.root.querySelector<HTMLElement>('.vc-tip')!
+    expect(tip.hidden).toBe(false)
+    expect(tip.textContent).toBe('VoiceCord')
+    shell.hideTip()
+    expect(tip.hidden).toBe(true)
     shell.destroy()
   })
 
@@ -187,7 +288,7 @@ describe('createShell', () => {
     shell.destroy()
   })
 
-  it('落ちたサブシステムの理由をパネルに出す（無言で失敗させない）', () => {
+  it('落ちたサブシステムの理由を出す（無言で失敗させない）', () => {
     const shell = createShell({ doc: document })
     shell.setStatus({
       ...STATUS,
@@ -212,16 +313,13 @@ describe('createShell', () => {
     shell.destroy()
   })
 
-  it('Radix の Portal 用のコンテナを #vc-root 配下に持つ', () => {
+  it('Radix の Portal 用のコンテナを #vc-root 配下の最後に持つ', () => {
     const shell = createShell({ doc: document })
     document.body.appendChild(shell.root)
     expect(shell.portal.className).toBe(PORTAL_CLASS)
     expect(shell.root.contains(shell.portal)).toBe(true)
-    // パネルより後ろ = ダイアログがパネルの下に潜らない
-    const kids = [...shell.root.children]
-    expect(kids.indexOf(shell.portal)).toBeGreaterThan(
-      kids.indexOf(shell.root.querySelector('.vc-panel')!)
-    )
+    // 最後 = ポップアウトやダイアログが FAB・診断の箱の下に潜らない
+    expect(shell.root.lastElementChild).toBe(shell.portal)
     shell.destroy()
   })
 
@@ -234,8 +332,6 @@ describe('createShell', () => {
   })
 
   it('スタイルはすべて #vc-root 配下に閉じている（Discord へ漏らさない）', () => {
-    // ルールごとに分け、宣言ブロックを落としてセレクタだけを取り出す。
-    // カンマ区切りの並びも 1 つずつ見る
     const selectors = SHELL_CSS.split('}')
       .map((rule) => rule.split('{')[0] ?? '')
       .flatMap((sel) => sel.split(','))
@@ -244,13 +340,21 @@ describe('createShell', () => {
 
     expect(selectors.length).toBeGreaterThan(0)
     const leaked = selectors.filter((s) => !s.startsWith(`#${ROOT_ID}`))
-    // 1 つでも漏れていると Discord 側のスタイルを壊しうる
     expect(leaked).toEqual([])
   })
 
-  it('閉じているときクリックを吸わない', () => {
+  it('クリックを吸わない', () => {
     expect(SHELL_CSS).toContain('pointer-events: none')
     expect(SHELL_CSS).toContain('pointer-events: auto')
+  })
+
+  it('色は Discord の変数を参照し、全てにフォールバック値がある', () => {
+    const vars = SHELL_CSS.match(/var\([^)]*\)/g) ?? []
+    expect(vars.length).toBeGreaterThan(0)
+    // var(--x) のままだと、Discord が変数名を変えた瞬間に無色になる
+    expect(vars.filter((v) => !v.includes(','))).toEqual([])
+    // テーマ追従を妨げる固定をしない
+    expect(SHELL_CSS).not.toContain('color-scheme')
   })
 })
 
@@ -334,7 +438,7 @@ describe('DOT_COLOR', () => {
 })
 
 describe('状態表示の出し分け', () => {
-  it('正常なときは何も出さない（サウンドボードの領域を食わない）', () => {
+  it('正常なときは何も出さない', () => {
     const shell = createShell({ doc: document })
     shell.setStatus({ ...STATUS, engine: 'attached', attachedPid: 30736 })
     const status = shell.root.querySelector<HTMLElement>('.vc-status')!
@@ -363,19 +467,24 @@ describe('状態表示の出し分け', () => {
     expect(status.textContent).toContain('state.json を書けません')
     shell.destroy()
   })
+
+  it('statusProblems は lastError と degraded をまとめる', () => {
+    expect(statusProblems(STATUS)).toEqual([])
+    expect(
+      statusProblems({ ...STATUS, lastError: 'a', degraded: [{ name: 'ui', error: 'b' }] })
+    ).toEqual(['a', 'ui: b'])
+  })
 })
 
 describe('FAB の既定位置', () => {
   it('settle で右下に寄る（Discord のユーザーパネルを塞がない）', () => {
-    // 左下には Discord のマイク・スピーカー・設定ボタンがある
     const shell = createShell({ doc: document })
     document.body.appendChild(shell.root)
-    const fab = shell.root.querySelector<HTMLElement>('.vc-fab')!
+    const fab = shell.fab
     // jsdom では実寸が 0 なので、測れたことにして詰める
     fab.getBoundingClientRect = () =>
       ({ left: 9999, top: 9999, width: 100, height: 30 }) as DOMRect
     shell.settle()
-    // 右下から余白ぶん内側に入る
     expect(parseFloat(fab.style.left)).toBeLessThan(window.innerWidth)
     expect(parseFloat(fab.style.left)).toBeGreaterThan(0)
     expect(parseFloat(fab.style.top)).toBeLessThan(window.innerHeight)
@@ -385,10 +494,9 @@ describe('FAB の既定位置', () => {
   it('位置を明示したときは settle で動かさない', () => {
     const shell = createShell({ doc: document, fabPos: { x: 10, y: 20 } })
     document.body.appendChild(shell.root)
-    const fab = shell.root.querySelector<HTMLElement>('.vc-fab')!
     shell.settle()
-    expect(fab.style.left).toBe('10px')
-    expect(fab.style.top).toBe('20px')
+    expect(shell.fab.style.left).toBe('10px')
+    expect(shell.fab.style.top).toBe('20px')
     shell.destroy()
   })
 })
