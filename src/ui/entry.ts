@@ -1,6 +1,9 @@
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { toast } from 'sonner'
+import type { VoiceCordStatus } from '../shared/ipc.js'
 import App from './App.js'
+import { usePopout, type AnchorInfo } from './popout.js'
 import UI_CSS from '../../.tmp/ui.css'
 
 /**
@@ -13,24 +16,57 @@ import UI_CSS from '../../.tmp/ui.css'
  * 例外を握り潰さないので、UI どころか FAB ごと出なくなる。
  *
  * 依存を 1 つずつ潰すのは追いかけっこになるので、UI はまるごと別ファイルにして
- * DOM が用意できてから require する。副次的に preload 本体が数十 KB で済み、
- * Discord の起動時に 900KB を読ませずに済む。
+ * DOM が用意できてから require する。
+ *
+ * preload からは下の窓口だけで操作する。ポップアウトをどの要素に付けるか
+ * （接ぎ木したボタンか、故障時の FAB か）は preload が決める。
  */
 
-export interface MountResult {
+export interface UiController {
   css: string
   unmount: () => void
+  /** ポップアウトのアンカー。null なら開かない */
+  setAnchor: (el: HTMLElement | null) => void
+  setOpen: (open: boolean) => void
+  toggle: () => void
+  isOpen: () => boolean
+  onOpenChange: (cb: (open: boolean) => void) => () => void
+  setStatus: (s: VoiceCordStatus) => void
+  setAnchorInfo: (info: AnchorInfo) => void
+  /** Discord のトーストの代わり。1 回だけ出したい警告に使う */
+  notify: (msg: string) => void
 }
 
 /** DOM が使えるようになってから呼ぶこと */
-export function mount(container: HTMLElement): MountResult {
+export function mount(container: HTMLElement): UiController {
   let root: Root | null = createRoot(container)
   root.render(createElement(App))
+  const st = usePopout
   return {
     css: UI_CSS,
     unmount: () => {
       root?.unmount()
       root = null
+    },
+    setAnchor: (el) => {
+      if (st.getState().anchor === el) return
+      st.setState({ anchor: el })
+      if (el === null) st.getState().setOpen(false)
+    },
+    setOpen: (open) => st.getState().setOpen(open && st.getState().anchor !== null),
+    toggle: () => {
+      const s = st.getState()
+      s.setOpen(!s.open && s.anchor !== null)
+    },
+    isOpen: () => st.getState().open,
+    onOpenChange: (cb) =>
+      st.subscribe((s, prev) => {
+        if (s.open !== prev.open) cb(s.open)
+      }),
+    setStatus: (s) => st.setState({ status: s }),
+    setAnchorInfo: (info) => st.setState({ anchorInfo: info }),
+    notify: (msg) => {
+      toast(msg, { duration: 8000 })
     }
   }
 }

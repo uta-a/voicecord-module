@@ -26,6 +26,7 @@ import {
 } from '@/lib/calibration'
 import { clampRefDbfs } from '@shared/loudness'
 import type { SoundItem, SourceStats } from '@shared/types'
+import { guardTrusted } from '@/lib/trusted'
 
 // 「あー」と出し続けてもらう前提の長さ。長くすると息が続かず途中で切れ、
 // 発話フレームが減って測定が不安定になる。
@@ -431,10 +432,11 @@ function LevelDialogBody(): React.JSX.Element {
           </p>
           <Button
             className="mt-4 h-11 w-full text-sm"
-            onClick={() => {
+            // 測定の開始は送信系の操作として扱う（ユーザーの決定）。合成クリックでは始めない
+            onClick={guardTrusted('音量調整の測定開始', () => {
               setReady(false)
               startVoiceCalib(MEASURE_SECONDS)
-            }}
+            })}
           >
             <Mic className="h-4 w-4" aria-hidden="true" />
             測定を開始（{MEASURE_SECONDS} 秒）
