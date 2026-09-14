@@ -6,38 +6,42 @@
    直接書いていた。ここは Discord の DOM に間借りするので、グローバルセレクタは
    1 つ残らず #vc-root の下へ落とす。1 つでも漏れると Discord 側の見た目が壊れる。 */
 @layer base {
+  /* 配色は Discord のテーマ変数を読む。#vc-root は <body> の子なので、Discord が
+     <html> に定義する変数（ライト / ダーク / ミッドナイト / Vencord のテーマ）を
+     そのまま継承し、テーマを切り替えると同時に変わる。
+     変数名は 2026-09-14 に Canary 1.0.1169（visual-refresh）で実測した新体系
+     （--background-base-* / --background-surface-* / --text-* など）。旧来の
+     --background-primary 系はこのビルドでは空だった。
+     **全てにフォールバック値を持たせる。** Discord が変数名を変えたときに無色にしない。
+     値はダークテーマの実測値に合わせてある。 */
   #vc-root {
-    --background: 240 5% 8%;
-    --foreground: 220 14% 94%;
-    --card: 240 5% 11%;
-    --card-hover: 240 5% 14%;
-    --card-foreground: 220 14% 94%;
-    --toolbar: 240 5% 10%;
-    --sidebar: 240 5% 9%;
-    --popover: 240 5% 10%;
-    --popover-foreground: 220 14% 94%;
-    --primary: 242 82% 69%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 240 4% 18%;
-    --secondary-foreground: 220 12% 90%;
-    --muted: 240 4% 16%;
-    --muted-foreground: 220 7% 62%;
-    --accent: 188 55% 20%;
-    --accent-foreground: 180 20% 96%;
-    --destructive: 0 68% 53%;
-    --destructive-foreground: 0 0% 100%;
-    /* 状態色。既存の emerald と amber の直書きはここへ寄せていない
-       (LevelDialog の警告は clampedAt が max か peak か、あるいは測定失敗かで意味が異なり、
-       一括置換で巻き込む危険があるため)。今後あらたに状態色を使うときはこちらを参照する。
-       彩度は --primary や --destructive と揃えてあり、生の emerald-500 より少し落としてある。 */
-    --success: 152 55% 42%;
-    --success-foreground: 152 20% 97%;
-    --warning: 38 85% 54%;
-    --warning-foreground: 38 30% 10%;
-    --border: 240 4% 20%;
-    --input: 240 4% 23%;
-    --ring: 242 82% 69%;
-    --radius: 0.375rem;
+    --vc-background: var(--background-surface-high, #242429);
+    --vc-foreground: var(--text-default, #efeff0);
+    --vc-card: var(--background-base-lower, #1a1a1e);
+    --vc-card-hover: var(--background-surface-higher, #28282d);
+    --vc-card-foreground: var(--text-default, #efeff0);
+    --vc-toolbar: var(--background-surface-high, #242429);
+    --vc-sidebar: var(--background-base-lower, #1a1a1e);
+    --vc-popover: var(--background-surface-higher, #28282d);
+    --vc-popover-foreground: var(--text-default, #efeff0);
+    --vc-primary: var(--control-primary-background-default, #5865f2);
+    --vc-primary-foreground: var(--control-primary-text-default, #ffffff);
+    --vc-secondary: var(--control-secondary-background-default, rgba(151, 151, 159, 0.12));
+    --vc-secondary-foreground: var(--control-secondary-text-default, #fbfbfb);
+    --vc-muted: var(--background-mod-subtle, rgba(151, 151, 159, 0.12));
+    --vc-muted-foreground: var(--text-muted, #94959c);
+    --vc-accent: var(--interactive-background-hover, rgba(151, 151, 159, 0.12));
+    --vc-accent-foreground: var(--interactive-text-hover, #fbfbfb);
+    --vc-destructive: var(--control-critical-primary-background-default, #d22d39);
+    --vc-destructive-foreground: var(--control-critical-primary-text-default, #ffffff);
+    --vc-success: var(--control-connected-background-default, #008545);
+    --vc-success-foreground: var(--control-connected-text-default, #ffffff);
+    /* 警告色は実測していない。Discord 側に無ければフォールバックの黄色になる */
+    --vc-warning: var(--status-warning, #f0b232);
+    --vc-warning-foreground: #1a1a1e;
+    --vc-border: var(--border-subtle, rgba(151, 151, 159, 0.12));
+    --vc-input: var(--border-normal, rgba(151, 151, 159, 0.2));
+    --vc-ring: var(--control-primary-background-default, #5865f2);
   }
 
   /* preflight を切った代わりの、#vc-root 配下だけのリセット。
@@ -107,7 +111,7 @@
   #vc-root input::placeholder,
   #vc-root textarea::placeholder {
     opacity: 1;
-    color: hsl(var(--muted-foreground));
+    color: var(--vc-muted-foreground);
   }
 
   /* Discord は svg にも独自のスタイルを当てている。lucide のアイコンが
@@ -128,7 +132,7 @@
      スコープ検査を通らない。変数を直に読む。 */
   #vc-root,
   #vc-root * {
-    border-color: hsl(var(--border));
+    border-color: var(--vc-border);
     letter-spacing: 0;
   }
 
@@ -142,12 +146,10 @@
     @apply text-foreground;
     margin: 0;
     user-select: none;
-    font-family: 'Segoe UI Variable', 'Segoe UI', 'Yu Gothic UI', 'Meiryo UI', system-ui, sans-serif;
+    /* Discord の本文フォント（gg sans）。変数が無ければ同じ並びへ落ちる */
+    font-family: var(--font-primary, 'gg sans', 'Hiragino Sans', 'Meiryo', 'Noto Sans', sans-serif);
     -webkit-font-smoothing: antialiased;
   }
-
-  /* 塗りはパネルの中身（.vc-body）だけに限る。.vc-body は器（shell.ts）が
-     持つ要素なので、塗りの指定も SHELL_CSS 側に置いてある。 */
 
   #vc-root button,
   #vc-root input {
@@ -155,8 +157,7 @@
   }
 
   /* ネイティブのスクロールバー。Radix ScrollArea を使えない場所(overflow-y-auto を持つ
-     ダイアログ本体など)で OS 既定の灰色バーが出ると、隣の ScrollArea と見た目が食い違う。
-     components/ui/scroll-area.tsx の ScrollBar(w-2 / rounded-full / bg-border)に揃える。 */
+     ダイアログ本体など)で OS 既定の灰色バーが出ると、隣の ScrollArea と見た目が食い違う。 */
   #vc-root ::-webkit-scrollbar {
     width: 0.5rem;
     height: 0.5rem;
@@ -180,6 +181,44 @@
   #vc-root ::-webkit-scrollbar-corner {
     background: transparent;
   }
+}
+
+/* Discord のサウンドボードのポップアウトの意匠。
+   寸法は 2026-09-14 に Canary 1.0.1169 の純正ポップアウト（picker）を CDP で実測した値:
+   幅 531px / 角丸 8px / 影 = --shadow-border + --shadow-high / ヘッダ 64px（下に --elevation-low）。
+   ユーティリティより後ろに置き、shadcn の PopoverContent の既定（shadow-md / border）に勝たせる。
+   ここは #vc-root の子孫なので塗ってよい（#vc-root 自身は塗らない）。 */
+#vc-root .vc-popout {
+  background-color: var(--vc-background);
+  color: var(--vc-foreground);
+  border-radius: var(--radius-sm, 8px);
+  border-width: 0;
+  box-shadow:
+    var(--shadow-border, 0 0 0 1px rgba(255, 255, 255, 0.08)),
+    var(--shadow-high, 0 12px 24px 0 rgba(0, 0, 0, 0.24));
+  overflow: hidden;
+}
+
+#vc-root .vc-popout-header {
+  box-shadow: var(--elevation-low, 0 1px 0 rgba(2, 2, 3, 0.2), 0 1.5px 0 rgba(5, 5, 6, 0.05), 0 2px 0 rgba(2, 2, 3, 0.05));
+}
+
+/* 検索欄。純正: 高さ 40px / 角丸 8px / 背景 黒 12% / 枠 --border-normal */
+#vc-root .vc-search {
+  background-color: rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--vc-input);
+}
+
+/* タイル。純正: 148x40 / 角丸 8px / 外枠の塗り + 内側に --background-mod-subtle */
+#vc-root .vc-tile {
+  background-color: var(--vc-card);
+}
+#vc-root .vc-tile-face {
+  background-color: var(--vc-muted);
+  border: 1px solid transparent;
+}
+#vc-root .vc-tile-face[data-active='true'] {
+  border-color: var(--vc-success);
 }
 
 @media (prefers-reduced-motion: reduce) {

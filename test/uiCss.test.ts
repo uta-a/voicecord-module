@@ -86,7 +86,7 @@ describe('compileUiCss', () => {
   })
 
   it('CSS 変数を #vc-root にだけ置く（Discord の変数を汚さない）', () => {
-    expect(css).toMatch(/#vc-root \{[\s\S]*?--background:/)
+    expect(css).toMatch(/#vc-root \{[\s\S]*?--vc-background:/)
     // :root へ置いてしまうと Discord 側の変数と同じ土俵に乗る
     expect(selectorsOf(css).filter((s) => s.includes(':root'))).toEqual([])
   })
@@ -148,17 +148,36 @@ describe('#vc-root 自身は塗らない', () => {
     expect(offenders).toEqual([])
   })
 
-  it('パネルの中身には塗りが当たっている（背景を失っていないこと）', async () => {
+  it('ポップアウトには塗りが当たっている（背景を失っていないこと）', () => {
     // 上の検査を「塗りを全部消す」で通してしまわないための対の検査。
-    // .vc-body は器が持つ要素なので、塗りも SHELL_CSS 側にある
-    const { SHELL_CSS } = await import('../src/preload/shell.js')
+    // M4.5 で旧パネル（.vc-body）は廃止し、塗りはポップアウト（.vc-popout）が持つ
     let painted = false
-    postcss.parse(SHELL_CSS).walkRules((rule: Rule) => {
-      if (!rule.selector.includes('.vc-body')) return
+    postcss.parse(css).walkRules((rule: Rule) => {
+      if (!rule.selector.includes('.vc-popout')) return
       rule.walkDecls((d) => {
         if (/^background/.test(d.prop)) painted = true
       })
     })
     expect(painted).toBe(true)
+  })
+})
+
+describe('Discord のテーマに追従する', () => {
+  it('配色の変数は Discord の変数を参照し、全てにフォールバック値がある', () => {
+    const decls: string[] = []
+    postcss.parse(css).walkRules((rule: Rule) => {
+      if (!rule.selectors.some((s) => s.trim() === ROOT_SELECTOR)) return
+      rule.walkDecls((d) => {
+        if (d.prop.startsWith('--vc-')) decls.push(`${d.prop}: ${d.value}`)
+      })
+    })
+    expect(decls.length).toBeGreaterThan(20)
+    // var(--x) だけだと、Discord が変数名を変えた瞬間に無色になる
+    const noFallback = decls.filter((d) => /var\(--[\w-]+\)/.test(d))
+    expect(noFallback).toEqual([])
+  })
+
+  it('移植元の固定色（hsl の三つ組）が残っていない', () => {
+    expect(css).not.toMatch(/hsl\(var\(--/)
   })
 })

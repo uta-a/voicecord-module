@@ -1,8 +1,8 @@
 import tailwindcssAnimate from 'tailwindcss-animate'
 
 /**
- * Tailwind の設定。移植元（VoiceCord/desktop）の theme をそのまま持ち込み、
- * Discord の DOM に同居させるための 2 点だけを足してある。
+ * Tailwind の設定。Discord の DOM に同居させるための 2 点と、Discord のテーマに
+ * 自動で追従させるための配色の付け替えがしてある。
  *
  * preflight は切る。あれは html / body / * を無条件に書き換えるので、
  * 入れた瞬間に Discord 側のリセットを上書きしてしまう。代わりに
@@ -10,9 +10,16 @@ import tailwindcssAnimate from 'tailwindcss-animate'
  *
  * important にセレクタを渡すと、全ユーティリティが `#vc-root .flex{...}` の形になる。
  * 詳細度が (0,1,1,0) になり、Discord のクラス（ほぼ (0,1,0,0)）に必ず勝つ。
- * prefix は付けない。付けるとコンポーネントの className を全部書き換えることになり、
- * 移植元との差分が追えなくなる。
+ * prefix は付けない。付けるとコンポーネントの className を全部書き換えることになる。
+ *
+ * 配色は `--vc-*` を経由して Discord の変数を読む（index.css）。Discord の変数は
+ * `color-mix(...)` や `hsl(... / a)` の生の色値なので、移植元の `hsl(var(--x))` の
+ * 包み方は使えない。`bg-primary/12` のような不透明度の指定を生かすため、
+ * color-mix で透明と混ぜる形にしてある（<alpha-value> は Tailwind が差し込む）。
  */
+
+/** @param {string} name */
+const token = (name) => `color-mix(in oklab, var(--vc-${name}) calc(<alpha-value> * 100%), transparent)`
 
 /** @type {import('tailwindcss').Config} */
 export default {
@@ -23,58 +30,58 @@ export default {
   theme: {
     extend: {
       colors: {
-        border: 'hsl(var(--border))',
-        input: 'hsl(var(--input))',
-        ring: 'hsl(var(--ring))',
-        background: 'hsl(var(--background))',
-        foreground: 'hsl(var(--foreground))',
+        border: token('border'),
+        input: token('input'),
+        ring: token('ring'),
+        background: token('background'),
+        foreground: token('foreground'),
         primary: {
-          DEFAULT: 'hsl(var(--primary))',
-          foreground: 'hsl(var(--primary-foreground))'
+          DEFAULT: token('primary'),
+          foreground: token('primary-foreground')
         },
         secondary: {
-          DEFAULT: 'hsl(var(--secondary))',
-          foreground: 'hsl(var(--secondary-foreground))'
+          DEFAULT: token('secondary'),
+          foreground: token('secondary-foreground')
         },
         destructive: {
-          DEFAULT: 'hsl(var(--destructive))',
-          foreground: 'hsl(var(--destructive-foreground))'
+          DEFAULT: token('destructive'),
+          foreground: token('destructive-foreground')
         },
         success: {
-          DEFAULT: 'hsl(var(--success))',
-          foreground: 'hsl(var(--success-foreground))'
+          DEFAULT: token('success'),
+          foreground: token('success-foreground')
         },
         warning: {
-          DEFAULT: 'hsl(var(--warning))',
-          foreground: 'hsl(var(--warning-foreground))'
+          DEFAULT: token('warning'),
+          foreground: token('warning-foreground')
         },
         muted: {
-          DEFAULT: 'hsl(var(--muted))',
-          foreground: 'hsl(var(--muted-foreground))'
+          DEFAULT: token('muted'),
+          foreground: token('muted-foreground')
         },
         accent: {
-          DEFAULT: 'hsl(var(--accent))',
-          foreground: 'hsl(var(--accent-foreground))'
+          DEFAULT: token('accent'),
+          foreground: token('accent-foreground')
         },
         popover: {
-          DEFAULT: 'hsl(var(--popover))',
-          foreground: 'hsl(var(--popover-foreground))'
+          DEFAULT: token('popover'),
+          foreground: token('popover-foreground')
         },
         card: {
-          DEFAULT: 'hsl(var(--card))',
-          foreground: 'hsl(var(--card-foreground))'
+          DEFAULT: token('card'),
+          foreground: token('card-foreground')
         },
-        toolbar: 'hsl(var(--toolbar))',
-        sidebar: 'hsl(var(--sidebar))',
-        'card-hover': 'hsl(var(--card-hover))'
+        toolbar: token('toolbar'),
+        sidebar: token('sidebar'),
+        'card-hover': token('card-hover')
       },
       fontFamily: {
-        display: ['Bahnschrift', 'Segoe UI Variable', 'Segoe UI', 'sans-serif']
+        display: ['var(--font-display, "gg sans")', 'Noto Sans', 'sans-serif']
       },
       borderRadius: {
-        lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)'
+        lg: 'var(--radius-sm, 8px)',
+        md: 'calc(var(--radius-sm, 8px) - 2px)',
+        sm: 'var(--radius-xs, 4px)'
       }
     }
   },
