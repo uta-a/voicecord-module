@@ -149,6 +149,7 @@ export function createEngineHost(deps: EngineHostDeps): EngineHost {
     child = null
     rejectAllPending(`エンジンが終了しました（コード ${code}）`)
     if (stopped) return
+    deps.emit({ ev: 'engine', payload: { ev: 'engineLost', code } })
 
     // 十分に生き延びていたなら、これは「たまたま落ちた」。間隔を戻す
     if (deps.now() - spawnedAt >= HEALTHY_UPTIME_MS) backoffIndex = 0
@@ -169,8 +170,14 @@ export function createEngineHost(deps: EngineHostDeps): EngineHost {
       const c = deps.fork()
       child = c
       spawnedAt = deps.now()
-      c.on('message', onMessage)
-      c.on('exit', onExit)
+      c.on('message', (message) => {
+        if (child !== c) return
+        onMessage(message)
+      })
+      c.on('exit', (code) => {
+        if (child !== c) return
+        onExit(code)
+      })
       pipe(c.stdout, 'info')
       pipe(c.stderr, 'error')
     } catch (e) {

@@ -627,6 +627,23 @@ export const useStore = create<State>((rawSet, get) => {
           }))
           break
         }
+        case 'engineLost': {
+          // utilityProcess が死ぬと hook から voiceEnded は来ない。自動再起動後は
+          // 同じ renderer に再アタッチするため、detached のように接続状態は落とさない。
+          localAudio.stopAll()
+          resetEntryState()
+          clearCalibTimer()
+          set((s) => ({
+            micTransmit: s.micTransmit === 'open' ? 'unknown' : s.micTransmit,
+            voices: [],
+            previewSrc: null,
+            calib:
+              s.calib.phase === 'measuring'
+                ? { ...s.calib, phase: 'failed', message: 'エンジンが停止したため測定を中止しました' }
+                : s.calib
+          }))
+          break
+        }
         case 'gateUnsafe': {
           // SetPTTActive が例外を投げた = 開閉のどちらに失敗したか分からない。
           // 危険側に倒して「不明」にする(閉じたことにしない)。

@@ -216,6 +216,7 @@ describe('落ちたとき', () => {
     h.host.start()
     h.procs[0]?.exit(9)
     expect(last(h.states).state).toBe('failed')
+    expect(h.events).toContainEqual({ ev: 'engine', payload: { ev: 'engineLost', code: 9 } })
     expect(last(h.states).error).toContain('コード 9')
     expect(last(h.states).error).toContain('3 秒後')
   })
@@ -300,6 +301,10 @@ describe('stop / restart', () => {
     h.host.start()
     h.host.restart()
     expect(h.procs).toHaveLength(2)
+    const currentPid = h.procs[1]?.pid
+    h.procs[0]?.exit(0)
+    expect(h.host.pid()).toBe(currentPid)
+    expect(h.events).not.toContainEqual({ ev: 'engine', payload: { ev: 'engineLost', code: 0 } })
     expect(h.procs[0]?.killed).toBe(true)
     // 待ちタイマーを仕込んでいないこと（restart は即時）
     expect(h.pendingDelay()).toBeNull()
