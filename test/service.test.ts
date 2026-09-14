@@ -99,6 +99,13 @@ describe('applyTo', () => {
     expect(rec!.originalSha256).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it('適用に成功したら AV の除外先を案内する（frida を隔離されると無言で鳴らなくなる）', () => {
+    const r = applyTo(deps, canaryResources)
+    expect(r.ok).toBe(true)
+    expect(r.message).toContain('Defender')
+    expect(r.message).toContain(deps.paths.root)
+  })
+
   it('適用後は active になる', () => {
     applyTo(deps, canaryResources)
     expect(listInstalls(deps)[0]).toMatchObject({ state: 'voicecord', active: true })

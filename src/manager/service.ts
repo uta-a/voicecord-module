@@ -162,7 +162,15 @@ export function applyTo(deps: ServiceDeps, resourcesDir: string, opts: ApplyOpti
   )
 
   const preserved = plan.preserved.length > 0 ? `（${plan.preserved.length} 件の他 mod を引き継ぎ）` : ''
-  return { ok: true, message: `${install.spec.label} ${install.version} に適用しました${preserved}` }
+  return {
+    ok: true,
+    message:
+      `${install.spec.label} ${install.version} に適用しました${preserved}\n` +
+      // frida_binding.node は AV に検知されうる。隔離されると Discord は動くのに
+      // 音だけ鳴らなくなるので、適用の直後に除外先を伝える（固定パスなので一度で済む）
+      `Windows Defender などのウイルス対策ソフトがエンジンを隔離することがあります。` +
+      `その場合は除外に次のフォルダを追加してください: ${deps.paths.root}`
+  }
 }
 
 export function unpatchFrom(deps: ServiceDeps, resourcesDir: string, mode: UnpatchMode): OpResult {
