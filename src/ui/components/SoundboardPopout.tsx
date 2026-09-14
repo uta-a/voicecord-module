@@ -580,7 +580,10 @@ export function SoundboardPopout(): React.JSX.Element {
           const el = t instanceof Element ? t : t.parentElement
           if (el?.closest(`#${ROOT_ID}`)) e.preventDefault()
         }}
-        className="vc-popout flex w-[531px] max-w-[calc(100vw-16px)] flex-col p-0"
+        // bg-background / border-0 は PopoverContent 既定の bg-popover / border を tailwind-merge で
+        // 外すため。残すと Tailwind の #vc-root .bg-popover が .vc-popout の塗りに勝ち、
+        // 純正より 1 段明るい --background-surface-higher になる（実機で比較して判明）
+        className="vc-popout flex w-[531px] max-w-[calc(100vw-16px)] flex-col border-0 bg-background p-0"
         style={{ maxHeight: 'var(--radix-popover-content-available-height)' }}
       >
         {view === 'main' ? <MainView /> : <SettingsView />}
