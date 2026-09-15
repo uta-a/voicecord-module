@@ -210,6 +210,23 @@ describe('injectStyles', () => {
 })
 
 describe('createShell', () => {
+  it('予備 FAB が Discord のボタンに重なると上へ避ける', () => {
+    const shell = createShell({ doc: document })
+    const target = document.createElement('button')
+    document.body.append(target, shell.root)
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({ left: 100, right: 200, top: 100, bottom: 132, width: 100, height: 32 } as DOMRect)
+    vi.spyOn(shell.fab, 'getBoundingClientRect').mockImplementation(() => {
+      const top = Number.parseFloat(shell.fab.style.top)
+      return { left: 100, right: 200, top, bottom: top + 32, width: 100, height: 32 } as DOMRect
+    })
+    shell.fab.style.left = '100px'
+    shell.fab.style.top = '100px'
+    shell.setFab(true, '故障')
+    expect(Number.parseFloat(shell.fab.style.top)).toBeLessThanOrEqual(60)
+    shell.destroy()
+    target.remove()
+    vi.restoreAllMocks()
+  })
   it('FAB と診断の箱を作り、既定では閉じている', () => {
     const shell = createShell({ doc: document })
     expect(shell.root.id).toBe(ROOT_ID)

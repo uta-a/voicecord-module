@@ -275,6 +275,21 @@ export function createShell(opts: ShellOptions): Shell {
     setStatus,
     setFab: (visible, text) => {
       fab.hidden = !visible
+      if (visible) {
+        const obstacles = Array.from(doc.querySelectorAll('button, [role="button"], a, input, select, textarea'))
+          .filter((el) => !root.contains(el))
+          .map((el) => el.getBoundingClientRect())
+          .filter((r) => r.width > 0 && r.height > 0)
+        // 故障時にも純正操作を隠さない。保存済みの位置は書き換えず、表示位置だけ上へ避ける。
+        for (let attempt = 0; attempt < 64; attempt++) {
+          const r = fab.getBoundingClientRect()
+          const overlap = obstacles.filter((o) => r.left < o.right && r.right > o.left && r.top < o.bottom && r.bottom > o.top)
+          if (overlap.length === 0 || r.height === 0) break
+          const top = Math.min(...overlap.map((o) => o.top)) - r.height - 8
+          if (top < 8) break
+          place(fab, { x: r.left, y: top })
+        }
+      }
       reasonText = text
       reason.textContent = text ?? ''
       if (!visible) setOpen(false)
