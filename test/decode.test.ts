@@ -231,12 +231,20 @@ describe('createApi', () => {
     expect(seen).toEqual([48000, 32000])
   })
 
-  it('レートが測れていなければ 48000 で進む（黙って止めない）', async () => {
+  it('レートが測れない Canary は既知の 32000 で進む', async () => {
     const seen: number[] = []
     const ipc = fakeIpc({ [CH.readSoundFile]: new ArrayBuffer(8), [CH.play]: 'v1' })
     const api = createApi(ipc, stereoAt(seen))
     await api.play({ srcId: 'a', path: 'a.wav', fp: '1_2', vol: 1 })
-    expect(seen).toEqual([48000])
+    expect(seen).toEqual([32000])
+  })
+
+  it('レート未計測でもフレーム長から注入レートを補完する', async () => {
+    const seen: number[] = []
+    const ipc = fakeIpc({ [CH.readSoundFile]: new ArrayBuffer(8), [CH.play]: 'v1', [CH.getStatus]: { ...STATUS, sampleRate: null, frameSamples: 320 } })
+    const api = createApi(ipc, stereoAt(seen))
+    await api.play({ srcId: 'a', path: 'a.wav', fp: '1_2', vol: 1 })
+    expect(seen).toEqual([32000])
   })
 
   it('状態イベントで注入レートに追随する（再アタッチで変わりうる）', async () => {

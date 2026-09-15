@@ -66,6 +66,15 @@ export function createApi(
   /** 実測された注入レート。状態が届くまでは分からない */
   let injectRate: number | null = null
 
+  const rateFromFrame = (frameSamples: number | null | undefined): number | null => {
+    if (!Number.isInteger(frameSamples) || frameSamples === undefined || frameSamples === null) return null
+    const inferred = frameSamples * 100
+    return inferred >= 8000 && inferred <= 192000 ? inferred : null
+  }
+
+  const fallbackRateForBuild = (build: string | undefined): number =>
+    build === 'canary' ? 32000 : PREVIEW_SAMPLE_RATE
+
   /**
    * 注入に使うレート。状態から取れなければ getStatus で一度だけ聞きに行く。
    * それでも取れなければ試聴と同じ 48000 で進む（黙って止めるよりは鳴らす）。
@@ -75,6 +84,7 @@ export function createApi(
     try {
       const s = await call<VoiceCordStatus>(CH.getStatus)
       if (s.sampleRate !== null) injectRate = s.sampleRate
+      else injectRate = rateFromFrame(s.frameSamples) ?? fallbackRateForBuild(s.discordBuild)
     } catch {
       // 取れなくても既定値で進む
     }
@@ -102,7 +112,9 @@ export function createApi(
 
   // 注入レートは attach のたびに測り直される。状態を見張って追随する
   onEvent((e) => {
-    if (e.ev === 'status') injectRate = e.status.sampleRate
+    if (e.ev === 'status') {
+      injectRate = e.status.sampleRate ?? rateFromFrame(e.status.frameSamples)
+    }
   })
 
   return {
