@@ -161,6 +161,13 @@ describe('applyPatch — Vencord 済み（Stable 相当）', () => {
     if (after.kind === 'shim') expect(after.chain).toEqual([VOICECORD, VENCORD])
   })
 
+  it('区切り文字が違う同じ patcher を重複させない', () => {
+    const mixedVoicecord = VOICECORD.replaceAll(BS, '/')
+    const p = planPatch(fs, t, { voicecordPatcher: mixedVoicecord })
+    if (!p.ok) throw new Error('plan failed')
+    expect(p.chain).toEqual([mixedVoicecord, VENCORD])
+  })
+
   it('他 mod が複数あっても全部引き継ぐ', () => {
     fs.writeFileSync(
       t.appAsar,

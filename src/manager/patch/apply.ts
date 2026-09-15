@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { win32 as pathWin32 } from 'node:path'
 import { buildFlatAsar } from './asarBuild.js'
 import type { WriteFileSync } from '../../shared/fsLike.js'
 import { classifyAppAsar, type AppAsarKind, type FsLike } from './asarInspect.js'
@@ -147,7 +148,10 @@ function composeChain(opts: PlanOptions, preserved: readonly string[]): string[]
 
 /** Windows のパスは大文字小文字を区別しない */
 function samePath(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase()
+  // Windows では同じ絶対パスでも、shim の生成元によって区切り文字が
+  // `/` と `\\` に分かれる。文字列比較だけだと同じ patcher が連鎖に
+  // 二重に残るため、Windows の規則で正規化してから比較する。
+  return pathWin32.normalize(a).toLowerCase() === pathWin32.normalize(b).toLowerCase()
 }
 
 export interface PatchResult {
