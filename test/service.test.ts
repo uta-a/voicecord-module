@@ -206,6 +206,16 @@ describe('再適用の必要性（可視化 3）', () => {
     expect(rows[0]!.state).toBe('clean')
     expect(rows[0]!.active).toBe(false)
   })
+
+  it('更新先にも VoiceCord が有効なら古い記録だけで stale にしない', () => {
+    applyTo(deps, canaryResources)
+    const newer = path.join(root, 'Local', 'DiscordCanary', 'app-1.0.1100', 'resources')
+    fs.mkdirSync(newer, { recursive: true })
+    fs.copyFileSync(path.join(canaryResources, 'app.asar'), path.join(newer, 'app.asar'))
+    fs.copyFileSync(path.join(canaryResources, '_app.asar'), path.join(newer, '_app.asar'))
+
+    expect(listInstalls(deps)[0]).toMatchObject({ active: true, staleVersion: false, patchedVersion: null })
+  })
 })
 
 describe('Discord の更新でパッチが外れたときの警告（実機で踏んだ回帰）', () => {

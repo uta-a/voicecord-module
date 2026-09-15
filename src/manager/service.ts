@@ -83,6 +83,7 @@ function toRow(
   // resourcesDir ではなくブランチで引く。Discord が更新されると
   // app-<version> ごと入れ替わって resourcesDir が変わるため
   const stale = branchStatus(state, i.spec.branch, i.version)
+  const active = isVoiceCordActive(i, deps.paths.patcher)
   const detail =
     st.state === 'voicecord'
       ? st.chain.join(' → ')
@@ -98,9 +99,9 @@ function toRow(
     resourcesDir: i.resourcesDir,
     state: st.state,
     detail,
-    active: isVoiceCordActive(i, deps.paths.patcher),
-    staleVersion: stale.kind === 'staleAfterUpdate',
-    patchedVersion: stale.kind === 'staleAfterUpdate' ? stale.patchedVersion : null,
+    active,
+    staleVersion: !active && stale.kind === 'staleAfterUpdate',
+    patchedVersion: !active && stale.kind === 'staleAfterUpdate' ? stale.patchedVersion : null,
     running: isRunning(deps.listProcesses, i.spec.exeName).running,
     lastPatcherRunAt: record?.lastPatcherRunAt ?? null
   }
