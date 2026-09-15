@@ -217,9 +217,6 @@
   background-color: var(--vc-muted);
   border: 1px solid transparent;
 }
-#vc-root .vc-tile-face[data-active='true'] {
-  border-color: var(--vc-success);
-}
 
 @media (prefers-reduced-motion: reduce) {
   #vc-root *,

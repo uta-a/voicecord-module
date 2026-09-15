@@ -20,7 +20,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { NowPlaying } from '@/components/NowPlaying'
 import { SettingsTabs } from '@/components/SettingsTabs'
 import { EntrySoundDialog } from '@/components/EntrySoundDialog'
 import { MasterFader } from '@/components/MasterFader'
@@ -40,8 +39,8 @@ import type { ConnState, SoundItem } from '@shared/types'
  * セクション見出し 32px（14px / 600）、タイル 148x40 角丸 8px、行の間隔 8px。
  * 純正の DOM は採取しない（自前で再現する、という決定）。
  *
- * 純正に無い機能（全体音量、再生中の一覧、送信状態、入場サウンド、校正）は、
- * ポップアウトを縦に伸ばして下端と設定画面（歯車）に入れる。
+ * 純正に無い機能（全体音量、送信状態、入場サウンド、校正）は、
+ * 下端と設定画面（歯車）に入れる。
  */
 
 const CONNECTION: Record<
@@ -171,21 +170,10 @@ function SoundTile({ sound }: { sound: SoundItem }): React.JSX.Element {
   const previewSrc = useStore((s) => s.previewSrc)
   const togglePreview = useStore((s) => s.togglePreview)
   const stopPreview = useStore((s) => s.stopPreview)
-  const stopVoice = useStore((s) => s.stopVoice)
   const unadjusted = useStore((s) => s.settings.calibration !== null && !s.isVolumeAdjusted(sound.id))
-  // 件数を選ぶ(配列を選ぶと無関係なタイルまで voices の更新で再描画される)
-  const activeCount = useStore(
-    (s) => s.voices.filter((v) => v.srcId === sound.id && v.kind === 'vc').length
-  )
   const [open, setOpen] = useState(false)
   const isPreviewing = previewSrc === sound.id
   const isConnected = connection === 'connected'
-
-  const stopThisSource = (): void => {
-    for (const v of useStore.getState().voices) {
-      if (v.srcId === sound.id && v.kind === 'vc') stopVoice(v.voiceId)
-    }
-  }
 
   return (
     <li
@@ -197,7 +185,6 @@ function SoundTile({ sound }: { sound: SoundItem }): React.JSX.Element {
     >
       <div
         className="vc-tile-face group relative flex h-full w-full items-center overflow-hidden rounded-lg"
-        data-active={activeCount > 0}
       >
         <button
           type="button"
@@ -221,8 +208,7 @@ function SoundTile({ sound }: { sound: SoundItem }): React.JSX.Element {
           <span className="min-w-0 truncate text-xs font-medium text-foreground">{sound.id}</span>
         </span>
 
-        {/* ホバー時の操作。純正は「プレビュー」と「お気に入り」を左右に置き、中央に再生の印を出す。
-            ここは「試聴」と「音量」を置き、鳴っているときは中央を「停止」にする。 */}
+        {/* 純正と同じく中央は常に再生の印。試聴と音量は左右の操作に分ける。 */}
         <div className="pointer-events-none absolute inset-0 flex items-center justify-between px-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
           <span className="absolute inset-0 bg-background/75" aria-hidden="true" />
           <IconButton
@@ -232,19 +218,7 @@ function SoundTile({ sound }: { sound: SoundItem }): React.JSX.Element {
           >
             {isPreviewing ? <Square className="h-4 w-4" /> : <Headphones className="h-4 w-4" />}
           </IconButton>
-          {activeCount > 0 ? (
-            <IconButton
-              label={
-                activeCount > 1 ? `${sound.id}の送信 ${activeCount} 本をまとめて停止` : `${sound.id}の送信を停止`
-              }
-              onClick={stopThisSource}
-              className="pointer-events-auto relative h-7 w-7 text-success hover:text-success"
-            >
-              <Square className="h-4 w-4 fill-current" />
-            </IconButton>
-          ) : (
-            <Play className="relative h-4 w-4 fill-current text-foreground" aria-hidden="true" />
-          )}
+          <Play className="relative h-4 w-4 fill-current text-foreground" aria-hidden="true" />
           <Popover
             open={open}
             onOpenChange={(v) => {
@@ -316,7 +290,6 @@ function MainView(): React.JSX.Element {
   const setSearch = useStore((s) => s.setSearch)
   const chooseFolder = useStore((s) => s.chooseFolder)
   const reload = useStore((s) => s.reload)
-  const voices = useStore((s) => s.voices)
   const stopAll = useStore((s) => s.stopAll)
   const setView = usePopout((s) => s.setView)
   const filtered = useMemo(
@@ -411,11 +384,6 @@ function MainView(): React.JSX.Element {
       </div>
 
       <div className="shrink-0 border-t bg-background">
-        {voices.length > 0 && (
-          <div className="flex h-40 flex-col border-b">
-            <NowPlaying />
-          </div>
-        )}
         <div className="flex items-center gap-3 px-3 py-2">
           <MasterFader className="flex-1" />
           <MicBadge />
