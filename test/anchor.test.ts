@@ -42,6 +42,10 @@ beforeEach(() => {
 })
 
 describe('findSoundboardAnchor', () => {
+  it('ツールチップの単独ラッパー内のボタンも 1 段目で見つける', () => {
+    document.body.innerHTML = `<div class="actionButtons_e131a9">${lottieButton()}<div><div>${lottieButton('サウンドボードを開く')}</div></div></div>`
+    expect(findSoundboardAnchor(document, { classes: { actionButtons: 'actionButtons_e131a9' } })?.tier).toBe(1)
+  })
   it('1 段目: 採取役のクラス名で見つける', () => {
     document.body.innerHTML = voicePanel()
     const hit = findSoundboardAnchor(document, { classes: { actionButtons: 'actionButtons_e131a9' } })

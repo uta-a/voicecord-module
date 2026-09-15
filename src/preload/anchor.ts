@@ -64,7 +64,13 @@ function isOurs(el: Element, ignoreWithin: Node | null | undefined): boolean {
 function directButtons(container: Element, ignoreWithin: Node | null | undefined): HTMLElement[] {
   const out: HTMLElement[] = []
   for (const child of Array.from(container.children)) {
-    if (child.tagName === 'BUTTON' && !isOurs(child, ignoreWithin)) out.push(child as HTMLElement)
+    let candidate = child
+    // 純正ボタンはツールチップの単独 div に包まれる。任意の子孫探索には広げない。
+    for (let depth = 0; depth < 4 && candidate.tagName === 'DIV' && candidate.children.length === 1; depth++) {
+      if (isOurs(candidate, ignoreWithin)) break
+      candidate = candidate.children[0]!
+    }
+    if (candidate.tagName === 'BUTTON' && !isOurs(candidate, ignoreWithin)) out.push(candidate as HTMLElement)
   }
   return out
 }

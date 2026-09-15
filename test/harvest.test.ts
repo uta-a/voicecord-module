@@ -45,6 +45,12 @@ function fakeWebpackChunk(cache: Record<string, { exports: unknown }>): unknown[
 }
 
 describe('findActionButtonClasses', () => {
+  it('短縮されたキーでも同じモジュールの列・ボタン・アイコンを拾う', () => {
+    expect(findActionButtonClasses([{ uu: 'actionButtons_e131a9', x6: 'button_e131a9', iA: 'buttonIcon_e131a9' }]))
+      .toEqual({ actionButtons: 'actionButtons_e131a9' })
+    expect(findActionButtonClasses([{ uu: 'actionButtons_e131a9', x6: 'button_other', iA: 'buttonIcon_other' }]))
+      .toBeNull()
+  })
   it('列・ボタン・アイコンが揃った CSS モジュールだけを拾う', () => {
     const got = findActionButtonClasses([
       { actionButtons: 'other_1' }, // 列だけでは拾わない
@@ -81,6 +87,20 @@ describe('findActionButtonClasses', () => {
 })
 
 describe('moduleCache', () => {
+  it('複数 runtime の最後が小さい場合も主キャッシュを選ぶ', () => {
+    const main = { 1: { exports: CSS_MODULE }, 2: { exports: {} } }
+    const chunk: unknown[] = []
+    chunk.push = (...items: unknown[]) => {
+      const runtime = (items[0] as unknown[])[2] as (r: unknown) => void
+      runtime({ c: main })
+      runtime({})
+      runtime({ c: { 3: { exports: {} } } })
+      return Array.prototype.push.apply(chunk, items)
+    }
+    expect(moduleCache({ webpackChunkdiscord_app: chunk }).cache).toBe(main)
+    expect(harvestOnce({ webpackChunkdiscord_app: chunk }).classes).toEqual({ actionButtons: CSS_MODULE.actionButtons })
+    expect(chunk).toHaveLength(0)
+  })
   it('Vencord が居ればそのキャッシュを借りる', () => {
     const cache = { 1: { exports: CSS_MODULE } }
     const win: HarvestWindow = { Vencord: { Webpack: { cache } }, webpackChunkdiscord_app: fakeWebpackChunk({}) }

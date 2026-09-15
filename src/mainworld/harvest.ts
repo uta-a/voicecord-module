@@ -87,6 +87,14 @@ function pick(obj: object): ActionButtonClasses | null {
       typeof o['buttonIcon'] !== 'string' ||
       typeof o['button'] !== 'string'
     ) {
+      // Canary は CSS の export キーも短縮する。値の接頭辞と同一のハッシュで照合する。
+      const values = Object.values(o).filter((v): v is string => typeof v === 'string')
+      for (const value of values) {
+        const match = /^actionButtons(_+[A-Za-z0-9]+)$/.exec(value)
+        if (match && values.includes(`button${match[1]}`) && values.includes(`buttonIcon${match[1]}`)) {
+          return { actionButtons: value }
+        }
+      }
       return null
     }
     return { actionButtons: o['actionButtons'] }
@@ -137,11 +145,18 @@ export function moduleCache(win: HarvestWindow): {
     return { source: 'none', cache: null, code: 'no-webpack' }
   }
   let req: { c?: unknown } | undefined
+  let largestCacheSize = -1
   const marker = Symbol('voicecord-harvest')
   const before = chunk.length
   try {
     chunk.push([[marker], {}, (r: { c?: unknown }) => {
-      req = r
+      // 同じ chunk 配列に複数 runtime が連鎖する。最後の補助 runtime で主キャッシュを失わない。
+      if (typeof r.c !== 'object' || r.c === null) return
+      const size = Object.keys(r.c).length
+      if (size > largestCacheSize) {
+        req = r
+        largestCacheSize = size
+      }
     }])
   } catch {
     return { source: 'none', cache: null, code: 'push-failed' }
