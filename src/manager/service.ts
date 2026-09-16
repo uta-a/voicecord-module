@@ -13,7 +13,6 @@ import {
   getInstall,
   readState,
   removeBranchRecords,
-  removeInstall,
   upsertInstall,
   writeState,
   type StateFs
@@ -78,12 +77,17 @@ function toRow(
   i: DiscordInstall,
   state: ReturnType<typeof readState>
 ): InstallRow {
-  const st = installState(i)
   const record = getInstall(state, i.resourcesDir)
   // resourcesDir ではなくブランチで引く。Discord が更新されると
   // app-<version> ごと入れ替わって resourcesDir が変わるため
   const stale = branchStatus(state, i.spec.branch, i.version)
   const active = isVoiceCordActive(i, deps.paths.patcher)
+  const detected = installState(i)
+  // VoiceCord が生成した shim でも、VoiceCord だけ外した後は他 mod のみ。
+  const st =
+    detected.state === 'voicecord' && !active
+      ? { state: 'otherMod' as const, requires: detected.chain }
+      : detected
   const detail =
     st.state === 'voicecord'
       ? st.chain.join(' → ')
@@ -195,7 +199,8 @@ export function unpatchFrom(deps: ServiceDeps, resourcesDir: string, mode: Unpat
   }
 
   const state = readState(deps.fs, deps.paths.state)
-  writeState(deps.fs, deps.paths.state, removeInstall(state, resourcesDir), deps.dirname)
+  // 意図的に外した後、古い版の記録から「更新で外れた」と誤警告しない。
+  writeState(deps.fs, deps.paths.state, removeBranchRecords(state, install.spec.branch), deps.dirname)
 
   if (result.restored) return { ok: true, message: `${install.spec.label} を素の状態に戻しました` }
   return {
@@ -228,7 +233,9 @@ function copyDir(
     const to = join(dest, name)
     const stat = fs.statSync(from)
     if (stat.isDirectory?.()) copyDir(fs, from, to, join)
-    else fs.copyFileSync(from, to)
+    else if (!fs.existsSync(to) || !fs.readFileSync(from).equals(fs.readFileSync(to))) {
+      fs.copyFileSync(from, to)
+    }
   }
 }
 

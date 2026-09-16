@@ -129,6 +129,16 @@ describe('applyTo', () => {
     expect(r.message).toContain('引き継ぎ')
   })
 
+  it('配置済みペイロードが同一なら再コピーしない', () => {
+    expect(applyTo(deps, canaryResources).ok).toBe(true)
+    const noCopyFs = Object.create(deps.fs) as ServiceDeps['fs']
+    noCopyFs.copyFileSync = () => {
+      throw new Error('同一ファイルをコピーしようとしました')
+    }
+
+    expect(applyTo({ ...deps, fs: noCopyFs }, canaryResources).ok).toBe(true)
+  })
+
   it('extraChain を足せる（Canary での連鎖テスト）', () => {
     const r = applyTo(deps, canaryResources, { extraChain: ['C:/Vencord/patcher.js'] })
     expect(r.ok).toBe(true)
@@ -187,6 +197,24 @@ describe('unpatchFrom', () => {
     expect(r.message).toContain('他 mod は残しています')
     const after = classifyAppAsar(fs, path.join(canaryResources, 'app.asar'))
     if (after.kind === 'shim') expect(after.chain).toEqual(['C:/Vencord/patcher.js'])
+  })
+
+  it('更新先から VoiceCord だけ外すと他 mod のみになり、古い版の警告も消える', () => {
+    unpatchFrom(deps, canaryResources, 'full')
+    applyTo(deps, canaryResources, { extraChain: ['C:/Vencord/patcher.js'] })
+
+    const newer = path.join(root, 'Local', 'DiscordCanary', 'app-1.0.1100', 'resources')
+    fs.mkdirSync(newer, { recursive: true })
+    fs.copyFileSync(path.join(canaryResources, 'app.asar'), path.join(newer, 'app.asar'))
+    fs.copyFileSync(path.join(canaryResources, '_app.asar'), path.join(newer, '_app.asar'))
+
+    expect(unpatchFrom(deps, newer, 'voicecordOnly').ok).toBe(true)
+    expect(listInstalls(deps)[0]).toMatchObject({
+      state: 'otherMod',
+      active: false,
+      staleVersion: false,
+      patchedVersion: null
+    })
   })
 })
 
