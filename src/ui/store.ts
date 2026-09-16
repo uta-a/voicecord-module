@@ -69,7 +69,9 @@ async function pcmFor(key: string, path: string): Promise<ArrayBuffer | null> {
       pcmCacheBytes -= v.byteLength
     }
     return buf
-  } catch {
+  } catch (e) {
+    // 呼び出し側は null で黙って鳴らさないので、理由はここで出す
+    pushStatus('音源を読み込めませんでした: ' + String(e))
     return null
   }
 }
@@ -878,7 +880,9 @@ export const useStore = create<State>((rawSet, get) => {
         const pcm = await pcmFor(snd.fp, snd.path)
         // PCM 取得の遅延中に停止/拒否(voiceEnded/playRejected)されていたら鳴らさない。
         if (pcm && get().voices.some((v) => v.voiceId === vid)) {
-          void localAudio.play(vid, snd.fp, pcm, monitorGain(get().settings, vol), false)
+          void localAudio
+            .play(vid, snd.fp, pcm, monitorGain(get().settings, vol), false)
+            .catch((e) => set({ status: 'モニター再生に失敗しました: ' + String(e) }))
         }
       }
     } catch (e) {
@@ -949,7 +953,16 @@ export const useStore = create<State>((rawSet, get) => {
           set({ previewSrc: null, voices: s.voices.filter((v) => v.kind !== 'preview') })
         }
       })
-    })()
+    })().catch((e) => {
+      // 鳴らせなかった試聴行が残ると「再生中なのに無音」に見えるので撤去して理由を出す
+      const s = get()
+      set({
+        status: '試聴に失敗しました: ' + String(e),
+        ...(s.previewSrc === srcId
+          ? { previewSrc: null, voices: s.voices.filter((v) => v.kind !== 'preview') }
+          : {})
+      })
+    })
   },
 
   // 試聴を止める(鳴っていなければ何もしない)。画面を閉じるときの後始末にも使う。

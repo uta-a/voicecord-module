@@ -59,6 +59,16 @@ export class LocalAudio {
     try {
       await anyCtx.setSinkId(deviceId || '')
     } catch (e) {
+      // Windows のデバイス差し替え後など、保存済み ID が消えている場合は既定へ戻す。
+      if (deviceId) {
+        try {
+          await anyCtx.setSinkId('')
+          this.sinkId = ''
+          return
+        } catch {
+          /* 既定デバイスへの復帰も失敗した場合は元のエラーを返す */
+        }
+      }
       throw new Error('モニター出力デバイスの切替に失敗しました: ' + String(e))
     }
   }
@@ -98,6 +108,9 @@ export class LocalAudio {
     onEnded?: () => void
   ): Promise<void> {
     const ctx = this.ensureCtx()
+    // 停止中の AudioContext で start() しても例外にならず無音になるため、再開を待って確かめる。
+    if (ctx.state !== 'running') await ctx.resume()
+    if (ctx.state !== 'running') throw new Error('音声出力を開始できませんでした（AudioContext: ' + ctx.state + '）')
     // 再生ごとの sink 再適用は失敗しても鳴らす方を優先(既定デバイスで出る)。
     // 切替失敗の通知は設定変更時の setDevice 側で行う。
     if (this.sinkId) await this.setDevice(this.sinkId).catch(() => {})
