@@ -16,7 +16,8 @@ import { createEngineHost, type EngineHost, type EngineProcessLike } from './eng
 import { registerIpc, Subscribers } from './ipc.js'
 import { guessBranch, locateInstall } from './locate.js'
 import { registerPreload } from './preloadReg.js'
-import { resolveSoundPath, scanFolder, type SoundsFs } from './soundsFs.js'
+import { createSoundboardCache, resolveReadableSoundPath } from './soundboardCache.js'
+import { scanFolder, type SoundsFs } from './soundsFs.js'
 import { runSubsystems, summarize, type Subsystem, type SubsystemLog } from './subsystems.js'
 
 /**
@@ -189,6 +190,8 @@ function main(): void {
     {
       name: 'ipc',
       run: () => {
+        // ほかのサーバーのサウンドの置き場（%TEMP%\VoiceCord\soundboard）。フォルダは初回の取得で作る
+        const soundboard = createSoundboardCache()
         registerIpc(ipcMain, {
           subscribers,
           getStatus: () => status,
@@ -202,9 +205,15 @@ function main(): void {
           sounds: {
             scan: (folder) => scanFolder(soundsFs, folder),
             read: (folder, requested) => {
-              const r = resolveSoundPath(soundsFs, folder, requested)
-              if (!r.ok) throw new Error(r.error)
-              const buf = fs.readFileSync(r.path)
+              // 取得したサウンドボード音声はフォルダの外にあるので、設定 ON のときだけキャッシュを先に通す
+              const target = resolveReadableSoundPath({
+                soundboard,
+                unlocked: needConfig().get().unlockSoundboard === true,
+                soundsFs,
+                folder,
+                requested
+              })
+              const buf = fs.readFileSync(target)
               // Buffer の backing store をそのまま渡すと、隣接する別データまで
               // 見せてしまう。切り出してから渡す
               return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
@@ -219,6 +228,9 @@ function main(): void {
               ? await dialog.showOpenDialog(parent, opts)
               : await dialog.showOpenDialog(opts)
             return r.canceled ? null : (r.filePaths[0] ?? null)
+          },
+          soundboard: {
+            fetch: (id) => soundboard.fetchSoundboardSound(id)
           },
           engine: {
             request: (ch, args) => needEngine().request(ch, args),

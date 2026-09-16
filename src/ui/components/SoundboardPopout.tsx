@@ -512,6 +512,7 @@ function SettingsView(): React.JSX.Element {
   const sounds = useStore((s) => s.sounds)
   const entryEnabled = useStore((s) => s.settings.entrySoundEnabled)
   const hideCamera = useStore((s) => s.settings.hideCameraButton)
+  const unlockSoundboard = useStore((s) => s.settings.unlockSoundboard)
   const entrySrcId = useStore((s) => s.settings.entrySoundSrcId)
   const patch = useStore((s) => s.patchSettings)
   const [entryOpen, setEntryOpen] = useState(false)
@@ -610,6 +611,22 @@ function SettingsView(): React.JSX.Element {
                       aria-label="ビデオボタンを隠して横一列に並べる"
                       checked={hideCamera}
                       onCheckedChange={(checked) => patch({ hideCameraButton: checked })}
+                    />
+                  }
+                />
+              </div>
+            </section>
+            <section aria-label="サウンドボード">
+              <h3 className="text-xs font-semibold text-muted-foreground">サウンドボード</h3>
+              <div>
+                <SettingsRow
+                  label="ほかのサーバーのサウンドを VoiceCord で鳴らす"
+                  description="Nitro が必要なサウンドをクリックしたとき、音声を取得して VoiceCord から再生します。サーバーの管理者が外部のサウンドを禁止している場合も鳴ります。Discord の利用規約に反する可能性があります"
+                  control={
+                    <Switch
+                      aria-label="ほかのサーバーのサウンドを VoiceCord で鳴らす"
+                      checked={unlockSoundboard}
+                      onCheckedChange={(checked) => patch({ unlockSoundboard: checked })}
                     />
                   }
                 />

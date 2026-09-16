@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import type { VoiceCordStatus } from '../shared/ipc.js'
 import App from './App.js'
 import { usePopout, type AnchorInfo } from './popout.js'
+import { useStore } from './store.js'
 import UI_CSS from '../../.tmp/ui.css'
 
 /**
@@ -35,6 +36,8 @@ export interface UiController {
   setAnchorInfo: (info: AnchorInfo) => void
   /** Discord のトーストの代わり。1 回だけ出したい警告に使う */
   notify: (msg: string) => void
+  /** 純正サウンドボードで押された、Nitro が必要なサウンドを VoiceCord から鳴らす */
+  playSoundboardSound: (sound: { soundId: string; name: string }) => void
 }
 
 /** DOM が使えるようになってから呼ぶこと */
@@ -67,6 +70,9 @@ export function mount(container: HTMLElement): UiController {
     setAnchorInfo: (info) => st.setState({ anchorInfo: info }),
     notify: (msg) => {
       toast(msg, { duration: 8000 })
+    },
+    playSoundboardSound: ({ soundId, name }) => {
+      void useStore.getState().playSoundboardSound(soundId, name)
     }
   }
 }

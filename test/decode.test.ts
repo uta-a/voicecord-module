@@ -377,6 +377,7 @@ describe('createApi', () => {
     await api.calibStart('voice', 300)
     await api.calibStop()
     await api.detach()
+    await api.fetchSoundboardSound('123')
     expect(ipc.calls.map((c) => c.ch)).toEqual([
       CH.saveConfig,
       CH.setMaster,
@@ -386,7 +387,9 @@ describe('createApi', () => {
       CH.openGate,
       CH.calibStart,
       CH.calibStop,
-      CH.detach
+      CH.detach,
+      CH.fetchSoundboardSound
     ])
+    expect(ipc.calls.at(-1)?.args).toEqual(['123'])
   })
 })

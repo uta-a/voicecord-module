@@ -105,6 +105,7 @@ export function createMockApi(): Api {
     entryLeaveDebounceMs: 2500,
     normalizeRefDbfs: -14,
     hideCameraButton: true,
+    unlockSoundboard: false,
     calibration: null
   }
 
@@ -139,6 +140,9 @@ export function createMockApi(): Api {
     scanFolder: async (folder) => (folder ? MOCK_SOUNDS.map((s) => ({ ...s })) : []),
     chooseFolder: async () => MOCK_FOLDER,
     getPcm: async (path) => synthPcm(path),
+    // 実装では CDN から取って一時フォルダに置く。ここは置いたことにしてパスを返すだけ
+    // (getPcm は path から音を合成するので、そのまま試聴・再生できる)
+    fetchSoundboardSound: async (id) => ({ path: `${MOCK_FOLDER}\\soundboard\\${id}.ogg`, fp: `sb-${id}` }),
 
     play: async (req: PlayReq) => {
       const voiceId = `mock-v${++voiceSeq}`

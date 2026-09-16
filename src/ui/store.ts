@@ -102,6 +102,7 @@ interface Settings {
   entryLeaveDebounceMs: number
   normalizeRefDbfs: number
   hideCameraButton: boolean
+  unlockSoundboard: boolean
   calibration: CalibrationRecord | null
 }
 
@@ -215,6 +216,8 @@ interface State {
   // 全音源を測り、保存済みの基準(normalizeRefDbfs)へ揃える音量で上書きする(手で決めた音量も含む)。
   normalizeAll: () => Promise<void>
   play: (srcId: string, override?: PlayOverride) => Promise<void>
+  // 純正サウンドボードの Nitro が必要なサウンドを、CDN から取って VC へ鳴らす(preload から呼ばれる)。
+  playSoundboardSound: (soundId: string, name: string) => Promise<void>
   stopVoice: (voiceId: string) => void
   setVoiceVolume: (voiceId: string, v: number) => void
   stopAll: () => void
@@ -402,6 +405,54 @@ export const useStore = create<State>((rawSet, get) => {
     if (typeof partial === 'function') rawSet((s) => withNotice(partial(s)))
     else rawSet(withNotice(partial))
   }
+
+  // VC 通話中(connected)でなければ再生しない。attach 済みでも待機中(waiting)は
+  // 送信ゲートが噛まず音が届かないため、行だけが積まれるのを防ぐ。
+  const requireVc = (): boolean => {
+    if (get().connection === 'connected') return true
+    set({ status: 'VC に接続してから再生してください' })
+    return false
+  }
+
+  // VC への再生の本体。音源の見つけ方(フォルダ / サウンドボード)が違っても、送り方・行の作り方・
+  // サイドトーン・失敗の出し方は同じにする。label は再生中一覧に出す名前。
+  const playResolved = async (snd: SoundItem, vol: number, label: string): Promise<void> => {
+    if (!api) return
+    const srcId = snd.id
+    try {
+      const vid = await api.play({ srcId, path: snd.path, fp: snd.fp, vol })
+      if (!vid) {
+        // engine 側は attach していないと null を返す(engine/index.ts の play)。
+        // 上の connection チェックは呼び出し時点のスナップショットなので、await の間に
+        // 切れているとここへ来る。main も renderer も黙ると完全な無反応になる。
+        set({ status: 'Discord との接続が切れたため再生できませんでした' })
+        return
+      }
+      // await 中に切替/detach された場合は取り消す(古いスナップショットで行を作らない)。
+      if (!get().attached) {
+        void api.stop(vid)
+        return
+      }
+      set((s) => ({
+        voices: [...s.voices, { voiceId: vid, srcId, name: label, volume: vol, kind: 'vc' }]
+      }))
+      // サイドトーン: 同じ音を自分の出力でも鳴らす(モニター音量×サウンド別音量)。
+      // 設定は await を跨いだ後の値を見る(関数先頭のスナップショットだと、待っている間に
+      // OFF にされたのにモニターだけ鳴り出す)。
+      if (get().settings.sidetoneEnabled) {
+        const pcm = await pcmFor(snd.fp, snd.path)
+        // PCM 取得の遅延中に停止/拒否(voiceEnded/playRejected)されていたら鳴らさない。
+        if (pcm && get().voices.some((v) => v.voiceId === vid)) {
+          void localAudio
+            .play(vid, snd.fp, pcm, monitorGain(get().settings, vol), false)
+            .catch((e) => set({ status: 'モニター再生に失敗しました: ' + String(e) }))
+        }
+      }
+    } catch (e) {
+      set({ status: '再生失敗: ' + String(e) })
+    }
+  }
+
   return {
   ready: false,
   // モック(素のブラウザで描画確認する場合)は接続済みとして扱う。connection だけ
@@ -432,6 +483,7 @@ export const useStore = create<State>((rawSet, get) => {
     entryLeaveDebounceMs: 2500,
     normalizeRefDbfs: -14,
     hideCameraButton: true,
+    unlockSoundboard: false,
     calibration: null
   },
   devices: [],
@@ -694,6 +746,8 @@ export const useStore = create<State>((rawSet, get) => {
           normalizeRefDbfs: cfg.normalizeRefDbfs,
           // 項目が無い古い設定は既定(ON)として扱う
           hideCameraButton: cfg.hideCameraButton !== false,
+          // 規約に触れうる機能なので、項目が無い古い設定では OFF として扱う
+          unlockSoundboard: cfg.unlockSoundboard === true,
           calibration: cfg.calibration
         }
       })
@@ -911,12 +965,7 @@ export const useStore = create<State>((rawSet, get) => {
       set({ voices: [...st0.voices, { voiceId, srcId, name: snd.id, volume: vol, kind: 'vc' }] })
       return
     }
-    // VC 通話中(connected)でなければ再生しない。attach 済みでも待機中(waiting)は
-    // 送信ゲートが噛まず音が届かないため、行だけが積まれるのを防ぐ。
-    if (st0.connection !== 'connected') {
-      set({ status: 'VC に接続してから再生してください' })
-      return
-    }
+    if (!requireVc()) return
     // 校正済みなのに音量が未調整の音源は、この音だけ基準とのズレぶん大きく(小さく)相手へ
     // 届く。画面の音量バーは 100% を指すだけでそれと分からないので、最初の 1 回だけ知らせる。
     // 入場音のように専用音量で鳴らす場合は音源別音量を使っていないので対象外。
@@ -931,38 +980,39 @@ export const useStore = create<State>((rawSet, get) => {
         status: `${snd.id} はまだ音量を揃えていません。音量調整の「音源の音量を揃える」を実行するまで、この音だけ相手への大きさがずれます`
       })
     }
-    try {
-      const vid = await api.play({ srcId, path: snd.path, fp: snd.fp, vol })
-      if (!vid) {
-        // engine 側は attach していないと null を返す(engine/index.ts の play)。
-        // 上の connection チェックは呼び出し時点のスナップショットなので、await の間に
-        // 切れているとここへ来る。main も renderer も黙ると完全な無反応になる。
-        set({ status: 'Discord との接続が切れたため再生できませんでした' })
-        return
-      }
-      // await 中に切替/detach された場合は取り消す(古いスナップショットで行を作らない)。
-      if (!get().attached) {
-        void api.stop(vid)
-        return
-      }
-      set((s) => ({
-        voices: [...s.voices, { voiceId: vid, srcId, name: snd.id, volume: vol, kind: 'vc' }]
-      }))
-      // サイドトーン: 同じ音を自分の出力でも鳴らす(モニター音量×サウンド別音量)。
-      // 設定は await を跨いだ後の値を見る(関数先頭のスナップショットだと、待っている間に
-      // OFF にされたのにモニターだけ鳴り出す)。
-      if (get().settings.sidetoneEnabled) {
-        const pcm = await pcmFor(snd.fp, snd.path)
-        // PCM 取得の遅延中に停止/拒否(voiceEnded/playRejected)されていたら鳴らさない。
-        if (pcm && get().voices.some((v) => v.voiceId === vid)) {
-          void localAudio
-            .play(vid, snd.fp, pcm, monitorGain(get().settings, vol), false)
-            .catch((e) => set({ status: 'モニター再生に失敗しました: ' + String(e) }))
-        }
-      }
-    } catch (e) {
-      set({ status: '再生失敗: ' + String(e) })
+    await playResolved(snd, vol, snd.id)
+  },
+
+  playSoundboardSound: async (soundId, name) => {
+    // 取得前に VC を確かめる(鳴らせないのに CDN へ取りに行かない)
+    if (api && !requireVc()) return
+    const srcId = `sb:${soundId}`
+    const label = name.trim() || soundId
+    // 音源別音量は無い(音量を揃える対象でもない)ので、素の 100% で鳴らし、未調整の通知も出さない
+    const vol = 1.0
+    if (!api) {
+      const voiceId = `v${seq++}`
+      set((s) => ({ voices: [...s.voices, { voiceId, srcId, name: label, volume: vol, kind: 'vc' }] }))
+      return
     }
+    let fetched: { path: string; fp: string }
+    try {
+      fetched = await api.fetchSoundboardSound(soundId)
+    } catch (e) {
+      // Electron の包み(Error invoking remote method '…': Error:)は理由ではないので外す
+      const reason = (e instanceof Error ? e.message : String(e)).replace(
+        /^Error invoking remote method '[^']*': (?:\w*Error: )?/,
+        ''
+      )
+      set({ status: `ほかのサーバーのサウンドを取得できませんでした: ${reason}` })
+      return
+    }
+    // 取得を待つ間に設定が OFF にされていたら、その意図に従って鳴らさない
+    if (!get().settings.unlockSoundboard) {
+      set({ status: 'ほかのサーバーのサウンドを鳴らす設定がオフになったため、再生しませんでした' })
+      return
+    }
+    await playResolved({ id: srcId, name: label, path: fetched.path, fp: fetched.fp, kind: 'file' }, vol, label)
   },
 
   stopVoice: (voiceId) => {

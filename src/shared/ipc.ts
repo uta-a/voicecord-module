@@ -21,6 +21,11 @@ export const CH = {
   chooseFolder: 'voicecord:chooseFolder',
   /** 生ファイルを ArrayBuffer で返す。folder 配下に限定する */
   readSoundFile: 'voicecord:readSoundFile',
+  /**
+   * ほかのサーバーのサウンドボード音声を CDN から取り、一時フォルダに置いてパスを返す。
+   * 置いたファイルは readSoundFile で読める（キャッシュ先直下の決まった名前に限る）
+   */
+  fetchSoundboardSound: 'voicecord:fetchSoundboardSound',
 
   /** renderer でデコードした PCM を engine へ渡す */
   preloadPcm: 'voicecord:preload',

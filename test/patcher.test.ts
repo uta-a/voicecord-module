@@ -243,6 +243,9 @@ function deps(over: Partial<IpcDeps> = {}): IpcDeps & {
       read: () => new ArrayBuffer(8)
     },
     chooseFolder: async () => 'C:/picked',
+    soundboard: {
+      fetch: async (id) => `C:/tmp/VoiceCord/soundboard/${id}.ogg`
+    },
     engine: {
       request: async (ch, args) => {
         engineCalls.push({ ch, args })
@@ -352,6 +355,54 @@ describe('registerIpc', () => {
     expect(() => ipc.handlers.get(CH.readSoundFile)!({ sender: fakeWc() }, 42)).toThrow(
       /パスが指定されていません/
     )
+  })
+
+  it('fetchSoundboardSound は ID を確かめてから取得させ、パスと指紋を返す', async () => {
+    const ipc = fakeIpcMain()
+    const seen: string[] = []
+    registerIpc(
+      ipc,
+      deps({
+        config: { get: () => ({ ...CONFIG, unlockSoundboard: true }), save: () => ({ ok: true }), loadWarning: null },
+        soundboard: {
+          fetch: async (id) => {
+            seen.push(id)
+            return `C:/cache/${id}.mp3`
+          }
+        }
+      })
+    )
+    const handler = ipc.handlers.get(CH.fetchSoundboardSound)!
+    expect(await handler({ sender: fakeWc() }, '1366072719438905447')).toEqual({
+      path: 'C:/cache/1366072719438905447.mp3',
+      fp: 'sb-1366072719438905447'
+    })
+    // 数字以外は取得に渡さない（URL とファイル名にそのまま入る）
+    for (const bad of [42, '', '../1', '1/2', 'abc', '1'.repeat(21)]) {
+      await expect(Promise.resolve().then(() => handler({ sender: fakeWc() }, bad))).rejects.toThrow(/サウンド ID/)
+    }
+    expect(seen).toEqual(['1366072719438905447'])
+  })
+
+  it('fetchSoundboardSound は設定が OFF なら取得させずに理由つきで断る', async () => {
+    const ipc = fakeIpcMain()
+    const seen: string[] = []
+    registerIpc(
+      ipc,
+      deps({
+        soundboard: {
+          fetch: async (id) => {
+            seen.push(id)
+            return `C:/cache/${id}.ogg`
+          }
+        }
+      })
+    )
+    expect(CONFIG.unlockSoundboard).toBe(false)
+    await expect(
+      Promise.resolve().then(() => ipc.handlers.get(CH.fetchSoundboardSound)!({ sender: fakeWc() }, '123'))
+    ).rejects.toThrow(/設定がオフ/)
+    expect(seen).toEqual([])
   })
 
   it('エンジン担当のチャンネルはそのまま転送する', async () => {

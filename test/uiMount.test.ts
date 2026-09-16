@@ -160,6 +160,7 @@ describe('UI のマウント', () => {
       '入場サウンド',
       'サウンドフォルダ',
       '表示',
+      'サウンドボード',
       '接続状態'
     ])
     expect(pop.querySelector('[role="tablist"]')).toBeNull()
@@ -353,6 +354,31 @@ describe('UI のマウント', () => {
     } finally {
       await act(async () => {
         useStore.getState().patchSettings({ hideCameraButton: before })
+        usePopout.getState().setOpen(false)
+      })
+    }
+  })
+
+  it('サウンドボードの行でほかのサーバーのサウンドを鳴らす設定をオンオフでき、規約の注意を添える', async () => {
+    const before = useStore.getState().settings.unlockSoundboard
+    try {
+      await openSettings({ status: null, anchorInfo: null })
+      const section = shell.portal.querySelector('section[aria-label="サウンドボード"]')!
+      expect(section.textContent).toContain('Discord の利用規約に反する可能性があります')
+      // ロックの理由（Nitro 不足 / 管理者の禁止）は区別しないので、その旨も書く
+      expect(section.textContent).toContain('サーバーの管理者が外部のサウンドを禁止している場合も鳴ります')
+      const sw = section.querySelector<HTMLButtonElement>(
+        'button[role="switch"][aria-label="ほかのサーバーのサウンドを VoiceCord で鳴らす"]'
+      )!
+      expect(sw).not.toBeNull()
+      expect(sw.getAttribute('aria-checked')).toBe(String(before))
+      await act(async () => {
+        sw.click()
+      })
+      expect(useStore.getState().settings.unlockSoundboard).toBe(!before)
+    } finally {
+      await act(async () => {
+        useStore.getState().patchSettings({ unlockSoundboard: before })
         usePopout.getState().setOpen(false)
       })
     }

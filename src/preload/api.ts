@@ -195,6 +195,7 @@ export function createApi(
 
     scanFolder: (folder: string) => call<SoundItem[]>(CH.scanFolder, folder),
     chooseFolder: () => call<string | null>(CH.chooseFolder),
+    fetchSoundboardSound: (id: string) => call<{ path: string; fp: string }>(CH.fetchSoundboardSound, id),
 
     // store.ts は ArrayBuffer を期待している（Float32Array のバッキングをそのまま渡す）
     getPcm: async (soundPath: string): Promise<ArrayBuffer> => {

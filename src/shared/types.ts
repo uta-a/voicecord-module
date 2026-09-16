@@ -73,6 +73,9 @@ export interface AppConfig {
   // 音声パネルのビデオ(カメラ)ボタンを隠し、VoiceCord のボタンを純正の列に横一列で並べる。
   // 既定は ON。OFF のときはビデオボタンを残し、列の幅を分けないよう純正サウンドボードの下に 2 段で置く。
   hideCameraButton: boolean
+  // 純正サウンドボードで Nitro が必要な(ほかのサーバーの)サウンドを押したとき、純正の勧誘を止めて
+  // 音声を CDN から取り、VoiceCord の注入で鳴らす。Discord の利用規約に反しうるので既定は OFF。
+  unlockSoundboard: boolean
   // 直近の出力レベル計測。null = 未計測。目標プリセットを変えたときに再計測なしで
   // 推奨値を出し直すために保持する。
   calibration: CalibrationRecord | null
@@ -159,5 +162,8 @@ export interface Api {
   calibStop: () => Promise<void>
   // 音源のラウドネス。ffmpeg 変換のキャッシュを使うので初回だけ時間がかかる。
   sourceStats: (path: string) => Promise<SourceStats>
+  // ほかのサーバーのサウンドボード音声を取得して一時フォルダに置く。戻り値はそのまま play の
+  // path / fp に使える(fp は ID 由来で、同じ音声なら毎回同じ)。
+  fetchSoundboardSound: (id: string) => Promise<{ path: string; fp: string }>
   onEngineEvent: (cb: (p: EngineEvent) => void) => () => void
 }

@@ -21,6 +21,14 @@ describe('createMockApi', () => {
     expect(new Set(sounds.map((s) => s.fp)).size).toBe(sounds.length)
   })
 
+  it('サウンドボードの取得は、ID 由来の指紋と一緒にパスを返す', async () => {
+    const api = createMockApi()
+    const got = await api.fetchSoundboardSound('123')
+    expect(got.fp).toBe('sb-123')
+    expect(got.path).toMatch(/123\.ogg$/)
+    expect((await api.getPcm(got.path)).byteLength).toBeGreaterThan(0)
+  })
+
   it('saveConfig した値が getConfig に反映される', async () => {
     const api = createMockApi()
     await api.saveConfig({ master: 2.5, entrySoundEnabled: true })

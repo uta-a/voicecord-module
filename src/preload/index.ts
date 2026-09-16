@@ -14,6 +14,12 @@ import { createShell, SHELL_CSS, statusProblems, type Shell } from './shell.js'
 import { probeDevices, probeSync, summarizeProbe } from './probe.js'
 import { injectStyles } from './styles.js'
 import { CAMERA_HIDE_CSS, setCameraButtonHidden } from './cameraButton.js'
+import {
+  decideSoundboardUnlock,
+  installLockedSoundInterceptor,
+  setSoundboardUnlocked,
+  UNLOCK_SOUNDBOARD_CSS
+} from './lockedSounds.js'
 
 /**
  * Discord の renderer に載る preload。isolated world で動く。
@@ -82,6 +88,8 @@ function main(): void {
   injectStyles(document, SHELL_CSS)
   // 効くのは html に印があるときだけ（既定は ON だが、設定を読むまでは何も隠さない）
   injectStyles(document, CAMERA_HIDE_CSS)
+  // これも html に印があるときだけ効く（既定は OFF）
+  injectStyles(document, UNLOCK_SOUNDBOARD_CSS)
 
   // 結果を受ける口は採取役を流し込む前に張る（取りこぼさない）
   const harvest = createHarvestClient({
@@ -324,12 +332,32 @@ function main(): void {
       setCameraButtonHidden(document, on)
       graft.sync(true)
     }
+    // ほかのサーバーのサウンドを VoiceCord で鳴らす設定。横取りの有無と Nitro 装飾を隠す印を同時に切り替える。
+    // UI が無ければ鳴らす先が無いので横取りしない（純正の動きのまま残す）
+    let unlockSoundboard = false
+    const unlockState = (): ReturnType<typeof decideSoundboardUnlock> =>
+      decideSoundboardUnlock({ setting: unlockSoundboard, uiMounted: ui !== null })
+    const applyUnlockSoundboard = (on: boolean): void => {
+      if (on === unlockSoundboard) return
+      unlockSoundboard = on
+      setSoundboardUnlocked(document, unlockState().markHtml)
+    }
+    installLockedSoundInterceptor(window, {
+      enabled: () => unlockState().intercept,
+      onPlay: (s) => ui?.playSoundboardSound(s)
+    })
+
     api.onConfigSaved((partial) => {
       if (typeof partial.hideCameraButton === 'boolean') applyHideCamera(partial.hideCameraButton)
+      if (typeof partial.unlockSoundboard === 'boolean') applyUnlockSoundboard(partial.unlockSoundboard)
     })
     void api
       .getConfig()
-      .then((cfg) => applyHideCamera(cfg.hideCameraButton !== false))
+      .then((cfg) => {
+        applyHideCamera(cfg.hideCameraButton !== false)
+        // 規約に触れうる機能なので、項目が無い古い設定では OFF として扱う
+        applyUnlockSoundboard(cfg.unlockSoundboard === true)
+      })
       .catch((e: unknown) => console.error('[VoiceCord] 設定を読めませんでした', e))
 
     graft.start()

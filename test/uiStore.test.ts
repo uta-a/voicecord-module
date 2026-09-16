@@ -229,3 +229,103 @@ describe('UI store normalizeAll', () => {
     expect(useStore.getState().status).toBe('音源がありません')
   })
 })
+
+describe('UI store playSoundboardSound', () => {
+  afterEach(() => {
+    vi.doUnmock('../src/ui/mockApi.js')
+    vi.resetModules()
+  })
+
+  async function setup(over: Partial<Api> = {}): Promise<{
+    useStore: (typeof import('../src/ui/store.js'))['useStore']
+    plays: Parameters<Api['play']>[0][]
+    fetches: string[]
+  }> {
+    const plays: Parameters<Api['play']>[0][] = []
+    const fetches: string[] = []
+    const base = createMockApi()
+    const api: Api = {
+      ...base,
+      play: async (req) => {
+        plays.push(req)
+        return `vid-${plays.length}`
+      },
+      fetchSoundboardSound: async (id) => {
+        fetches.push(id)
+        return { path: `C:/tmp/VoiceCord/soundboard/${id}.ogg`, fp: `sb-${id}` }
+      },
+      ...over
+    }
+    vi.doMock('../src/ui/mockApi.js', () => ({ mockApi: api }))
+    const { useStore } = await import('../src/ui/store.js')
+    await useStore.getState().init()
+    // preload は設定 ON のときだけ呼ぶ。ここでは ON の状態から始める
+    useStore.setState({ settings: { ...useStore.getState().settings, unlockSoundboard: true } })
+    return { useStore, plays, fetches }
+  }
+
+  it('VC に接続していなければ取得も再生もせず、理由を出す', async () => {
+    const { useStore, plays, fetches } = await setup()
+    useStore.setState({ attached: true, connection: 'waiting', status: '' })
+    await useStore.getState().playSoundboardSound('123', 'Windows Alarm')
+    expect(fetches).toEqual([])
+    expect(plays).toEqual([])
+    expect(useStore.getState().status).toBe('VC に接続してから再生してください')
+  })
+
+  it('取得に失敗したら理由を出して鳴らさない', async () => {
+    const { useStore, plays } = await setup({
+      fetchSoundboardSound: async () => {
+        // Electron の invoke は main の例外をこの形に包んで返す
+        throw new Error("Error invoking remote method 'voicecord:fetchSoundboardSound': Error: HTTP 404")
+      }
+    })
+    useStore.setState({ attached: true, connection: 'connected', voices: [] })
+    await useStore.getState().playSoundboardSound('123', 'Windows Alarm')
+    expect(plays).toEqual([])
+    expect(useStore.getState().status).toBe('ほかのサーバーのサウンドを取得できませんでした: HTTP 404')
+    expect(useStore.getState().voices).toEqual([])
+  })
+
+  it('取得している間に設定が OFF にされたら鳴らさず、理由を出す', async () => {
+    let finish: (v: { path: string; fp: string }) => void = () => undefined
+    const { useStore, plays } = await setup({
+      fetchSoundboardSound: () => new Promise((resolve) => (finish = resolve))
+    })
+    useStore.setState({ attached: true, connection: 'connected', voices: [], status: '' })
+    const job = useStore.getState().playSoundboardSound('123', 'Windows Alarm')
+    useStore.setState({ settings: { ...useStore.getState().settings, unlockSoundboard: false } })
+    finish({ path: 'C:/tmp/VoiceCord/soundboard/123.ogg', fp: 'sb-123' })
+    await job
+    expect(plays).toEqual([])
+    expect(useStore.getState().voices).toEqual([])
+    expect(useStore.getState().status).toContain('設定がオフ')
+  })
+
+  it('取得したパスと指紋で、音量 1.0 のまま VC へ鳴らし、表示名で行を作る', async () => {
+    const { useStore, plays, fetches } = await setup()
+    useStore.setState({
+      attached: true,
+      connection: 'connected',
+      voices: [],
+      status: '',
+      sourceVolumes: { 'sb:123': 0.2 },
+      settings: {
+        ...useStore.getState().settings,
+        unlockSoundboard: true,
+        sidetoneEnabled: false,
+        calibration: { at: 1, voiceRms: 0.1, voicePeak: 0.5, activeRatio: 1, targetDb: 0 }
+      }
+    })
+    await useStore.getState().playSoundboardSound('123', 'Windows Alarm')
+    expect(fetches).toEqual(['123'])
+    expect(plays).toEqual([
+      { srcId: 'sb:123', path: 'C:/tmp/VoiceCord/soundboard/123.ogg', fp: 'sb-123', vol: 1 }
+    ])
+    expect(useStore.getState().voices).toEqual([
+      { voiceId: 'vid-1', srcId: 'sb:123', name: 'Windows Alarm', volume: 1, kind: 'vc' }
+    ])
+    // 音量を揃える対象ではないので、未調整の通知は出さない
+    expect(useStore.getState().status).toBe('')
+  })
+})

@@ -1,4 +1,5 @@
 import { CH, type VoiceCordEvent, type VoiceCordStatus } from '../shared/ipc.js'
+import { isSoundboardSoundId } from '../shared/soundboard.js'
 import type { AppConfig, LoadedConfig, SoundItem } from '../shared/types.js'
 
 /**
@@ -78,6 +79,11 @@ export interface SoundsPort {
   read: (folder: string, requested: string) => ArrayBuffer
 }
 
+export interface SoundboardPort {
+  /** CDN から取得（キャッシュにあればそれ）して実パスを返す。失敗は理由つきで throw */
+  fetch: (id: string) => Promise<string>
+}
+
 export interface EnginePort {
   request: (ch: string, args: unknown[]) => Promise<unknown>
   restart: () => void
@@ -90,6 +96,7 @@ export interface IpcDeps {
   sounds: SoundsPort
   /** ネイティブのフォルダ選択。取り消しなら null */
   chooseFolder: () => Promise<string | null>
+  soundboard: SoundboardPort
   engine: EnginePort
 }
 
@@ -154,6 +161,18 @@ export function registerIpc(ipcMain: IpcMainLike, deps: IpcDeps): void {
   on(CH.readSoundFile, (_e, requested) => {
     if (typeof requested !== 'string') throw new Error('パスが指定されていません')
     return deps.sounds.read(deps.config.get().folder, requested)
+  })
+
+  on(CH.fetchSoundboardSound, async (_e, id) => {
+    // ID は URL とファイル名にそのまま入る。renderer の検証とは独立に、ここでも数字だけに閉じる
+    if (!isSoundboardSoundId(id)) throw new Error('サウンド ID の形が想定と違います')
+    // renderer 側でも OFF なら呼ばないが、外部への通信とファイルの書き込みなので main でも設定を確かめる
+    if (deps.config.get().unlockSoundboard !== true) {
+      throw new Error('ほかのサーバーのサウンドを鳴らす設定がオフです')
+    }
+    const soundPath = await deps.soundboard.fetch(id)
+    // 同じ ID の音声は差し替わらないので、ID をそのまま指紋にする（engine の PCM キャッシュのキー）
+    return { path: soundPath, fp: `sb-${id}` }
   })
 
   // 再アタッチだけは engine への転送ではなくプロセスの起こし直し。

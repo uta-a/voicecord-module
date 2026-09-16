@@ -70,6 +70,7 @@ export function defaultConfig(soundsFolder: string): AppConfig {
     entryLeaveDebounceMs: 2500,
     normalizeRefDbfs: -14,
     hideCameraButton: true,
+    unlockSoundboard: false,
     calibration: null
   }
 }
@@ -113,6 +114,7 @@ export function sanitize(data: AppConfig, dflt: AppConfig): AppConfig {
   }
   // 手編集で真偽値以外が入っていたら既定へ(文字列の "false" を真と扱わない)
   if (typeof rec['hideCameraButton'] !== 'boolean') rec['hideCameraButton'] = dfltRec['hideCameraButton']
+  if (typeof rec['unlockSoundboard'] !== 'boolean') rec['unlockSoundboard'] = dfltRec['unlockSoundboard']
   // folder は文字列でなければ既定へ。空文字は「未設定」として既定に戻す
   if (typeof rec['folder'] !== 'string' || rec['folder'] === '') rec['folder'] = dfltRec['folder']
   return data
