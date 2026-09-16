@@ -466,6 +466,33 @@ describe('UI のマウント', () => {
     })
   })
 
+  it('外へフォーカスが移っても閉じない（純正のポップアウトが閉じるときのフォーカス戻しで閉じない）が、外側のクリックでは閉じる', async () => {
+    const other = document.createElement('button')
+    document.body.appendChild(other)
+    await act(async () => {
+      usePopout.setState({ anchor, status: null })
+      usePopout.getState().setOpen(true)
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    await act(async () => {
+      other.focus()
+      other.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(usePopout.getState().open).toBe(true)
+
+    await act(async () => {
+      other.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
+      other.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }))
+    })
+    expect(usePopout.getState().open).toBe(false)
+    other.remove()
+  })
+
   it('フッターの「揃える」は全停止の左にあり、全件調整済みでも押せ、音源が無ければ押せない', async () => {
     const normalizeAll = vi.fn(async () => {})
     const original = {

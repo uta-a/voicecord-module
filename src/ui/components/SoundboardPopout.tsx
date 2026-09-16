@@ -674,6 +674,10 @@ export function SoundboardPopout(): React.JSX.Element {
           const el = t instanceof Element ? t : t.parentElement
           if (el?.closest(`#${ROOT_ID}`)) e.preventDefault()
         }}
+        // フォーカスが外へ移っただけでは閉じない。純正のサウンドボードを開いたまま VoiceCord を開くと、
+        // 純正側が閉じるときに自分のボタンへフォーカスを戻し、開いた直後に閉じてしまう。
+        // 閉じるのは外側のクリック・Esc・VoiceCord ボタンだけにする
+        onFocusOutside={(e) => e.preventDefault()}
         // bg-background / border-0 は PopoverContent 既定の bg-popover / border を tailwind-merge で
         // 外すため。残すと Tailwind の #vc-root .bg-popover が .vc-popout の塗りに勝ち、
         // 純正より 1 段明るい --background-surface-higher になる（実機で比較して判明）
