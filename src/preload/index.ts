@@ -13,6 +13,7 @@ import { decideFab, FAB_REASON_TEXT, readVcSignal, type FabReason } from './pres
 import { createShell, SHELL_CSS, statusProblems, type Shell } from './shell.js'
 import { probeDevices, probeSync, summarizeProbe } from './probe.js'
 import { injectStyles } from './styles.js'
+import { CAMERA_HIDE_CSS, setCameraButtonHidden } from './cameraButton.js'
 
 /**
  * Discord の renderer に載る preload。isolated world で動く。
@@ -79,6 +80,8 @@ function main(): void {
   globalThis.api = api
 
   injectStyles(document, SHELL_CSS)
+  // 効くのは html に印があるときだけ（既定は ON だが、設定を読むまでは何も隠さない）
+  injectStyles(document, CAMERA_HIDE_CSS)
 
   // 結果を受ける口は採取役を流し込む前に張る（取りこぼさない）
   const harvest = createHarvestClient({
@@ -287,12 +290,14 @@ function main(): void {
       if (open) sh.hideTip()
     })
 
+    let hideCamera = false
     const graft = createGraft({
       doc: document,
       ignoreWithin: sh.root,
       find: () =>
         findSoundboardAnchor(document, { classes: harvest.classes(), ignoreWithin: sh.root, inVc }),
       build: (anchor) => wireButton(buildGraftButton(document, anchor, GRAFT_LABEL)),
+      inline: () => hideCamera,
       refresh: refreshGraftButton,
       onChange: (s) => {
         graftState = s
@@ -311,6 +316,21 @@ function main(): void {
     setInterval(() => {
       if (inVc && graftState.button === null) update()
     }, 1000)
+
+    // ビデオボタンを隠して横一列に並べる設定。ボタンの位置（2 段 / 横一列）と CSS の印を同時に切り替える
+    const applyHideCamera = (on: boolean): void => {
+      if (on === hideCamera) return
+      hideCamera = on
+      setCameraButtonHidden(document, on)
+      graft.sync(true)
+    }
+    api.onConfigSaved((partial) => {
+      if (typeof partial.hideCameraButton === 'boolean') applyHideCamera(partial.hideCameraButton)
+    })
+    void api
+      .getConfig()
+      .then((cfg) => applyHideCamera(cfg.hideCameraButton !== false))
+      .catch((e: unknown) => console.error('[VoiceCord] 設定を読めませんでした', e))
 
     graft.start()
 

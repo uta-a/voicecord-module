@@ -101,6 +101,7 @@ interface Settings {
   entryDelayMs: number
   entryLeaveDebounceMs: number
   normalizeRefDbfs: number
+  hideCameraButton: boolean
   calibration: CalibrationRecord | null
 }
 
@@ -430,6 +431,7 @@ export const useStore = create<State>((rawSet, get) => {
     entryDelayMs: 0,
     entryLeaveDebounceMs: 2500,
     normalizeRefDbfs: -14,
+    hideCameraButton: true,
     calibration: null
   },
   devices: [],
@@ -690,6 +692,8 @@ export const useStore = create<State>((rawSet, get) => {
           entryDelayMs: cfg.entryDelayMs,
           entryLeaveDebounceMs: cfg.entryLeaveDebounceMs,
           normalizeRefDbfs: cfg.normalizeRefDbfs,
+          // 項目が無い古い設定は既定(ON)として扱う
+          hideCameraButton: cfg.hideCameraButton !== false,
           calibration: cfg.calibration
         }
       })

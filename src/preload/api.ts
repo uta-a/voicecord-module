@@ -63,6 +63,8 @@ export interface VoiceCordApi extends Api {
   subscribe(): Promise<VoiceCordStatus>
   /** 戻り値を呼ぶと購読を解除する */
   onEvent(cb: (e: VoiceCordEvent) => void): () => void
+  /** UI が設定を保存したら、保存した差分を preload 側(接ぎ木など)へ知らせる。戻り値で解除 */
+  onConfigSaved(cb: (partial: Partial<AppConfig>) => void): () => void
 }
 
 export function createApi(
@@ -70,6 +72,9 @@ export function createApi(
   makeDecoder: (sampleRate: number) => AudioDecoder = createOfflineDecoder
 ): VoiceCordApi {
   const call = <T>(ch: string, ...args: unknown[]): Promise<T> => ipc.invoke(ch, ...args) as Promise<T>
+
+  /** UI と preload は同じ isolated world にいるので、保存の呼び口で直接知らせる */
+  const configListeners = new Set<(partial: Partial<AppConfig>) => void>()
 
   /** 実測された注入レート。状態が届くまでは分からない */
   let injectRate: number | null = null
@@ -148,7 +153,14 @@ export function createApi(
     onEvent,
 
     getConfig: () => call<LoadedConfig>(CH.getConfig),
-    saveConfig: (partial: Partial<AppConfig>) => call<void>(CH.saveConfig, partial),
+    saveConfig: (partial: Partial<AppConfig>) => {
+      for (const cb of configListeners) cb(partial)
+      return call<void>(CH.saveConfig, partial)
+    },
+    onConfigSaved: (cb) => {
+      configListeners.add(cb)
+      return () => void configListeners.delete(cb)
+    },
 
     // 自分がどのビルドに寄生しているかは自明なので、選ばせる意味が無い。
     // store.ts の呼び口を残したまま、現在のビルドだけを返す（M4.5 で UI ごと消える）

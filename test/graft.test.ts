@@ -34,7 +34,7 @@ interface Harness {
   timers: Array<{ ms: number; fn: () => void }>
 }
 
-function harness(opts: { deferSchedule?: boolean } = {}): Harness {
+function harness(opts: { deferSchedule?: boolean; inline?: () => boolean } = {}): Harness {
   const root = document.createElement('div')
   root.id = 'vc-root'
   document.body.appendChild(root)
@@ -56,7 +56,8 @@ function harness(opts: { deferSchedule?: boolean } = {}): Harness {
     now: () => now,
     // テストでは同期で探す（rAF を待たない）。遅延させたいテストだけ溜める
     schedule: (fn) => (opts.deferSchedule ? void pending.push(fn) : fn()),
-    setTimer: (fn, ms) => void timers.push({ ms, fn })
+    setTimer: (fn, ms) => void timers.push({ ms, fn }),
+    inline: opts.inline
   })
   return { states, graft, setNow: (t) => void (now = t), root, finds: () => finds, pending, timers }
 }
@@ -109,6 +110,43 @@ describe('buildGraftButton', () => {
     expect(h.graft.state().tier).toBe(2)
     expect(h.graft.state().inserts).toBe(inserts)
     // 止めないと observer が残り、後続のテストの DOM に挿し込んでしまう
+    h.graft.stop()
+  })
+
+  // ビデオボタンを隠す設定のときは、純正の包みに入れず列の直下（包みの隣）に横一列で並べる。
+  // 包みの中に子を足すと、React が管理する包みのハンドラやサイズに自前ボタンが混ざる。
+  it('横一列の設定なら包みの隣に並べ、設定を切り替えると2段との間で移し替える', () => {
+    document.body.innerHTML = `<div class="container_e131a9"><div class="actionButtons_e131a9">
+      <div><button class="button_e131a9" aria-label="カメラをオンにする"></button></div>
+      <div><button class="button_e131a9"></button></div>
+      <div><button class="button_e131a9"></button></div>
+      <div><button class="button_e131a9" aria-label="サウンドボードを開く"><div class="contents__201d5"><div class="lottieIcon__5eb9b"><svg></svg></div></div></button></div>
+    </div></div>`
+    let inline = true
+    const h = harness({ inline: () => inline })
+    h.graft.start()
+    const row = document.querySelector('.actionButtons_e131a9')!
+    const slot = document.querySelector('[aria-label="サウンドボードを開く"]')!.parentElement!
+    const btn = document.querySelector<HTMLElement>(`[${GRAFT_ATTR}]`)!
+    expect(btn.parentElement).toBe(row)
+    expect(btn.previousElementSibling).toBe(slot)
+    expect(slot.children.length).toBe(1)
+    expect(btn.style.marginTop).toBe('')
+    // 同じ設定のまま探し直しても挿し直さない
+    const inserts = h.graft.state().inserts
+    h.graft.sync(false)
+    h.graft.sync(true)
+    expect(h.graft.state().inserts).toBe(inserts)
+
+    inline = false
+    h.graft.sync(true)
+    expect(btn.parentElement).toBe(slot)
+    expect(btn.style.marginTop).toBe('8px')
+
+    inline = true
+    h.graft.sync(true)
+    expect(btn.parentElement).toBe(row)
+    expect(btn.style.marginTop).toBe('')
     h.graft.stop()
   })
 

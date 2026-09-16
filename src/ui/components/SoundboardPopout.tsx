@@ -511,6 +511,7 @@ function SettingsView(): React.JSX.Element {
   const reload = useStore((s) => s.reload)
   const sounds = useStore((s) => s.sounds)
   const entryEnabled = useStore((s) => s.settings.entrySoundEnabled)
+  const hideCamera = useStore((s) => s.settings.hideCameraButton)
   const entrySrcId = useStore((s) => s.settings.entrySoundSrcId)
   const patch = useStore((s) => s.patchSettings)
   const [entryOpen, setEntryOpen] = useState(false)
@@ -594,6 +595,22 @@ function SettingsView(): React.JSX.Element {
                         再読込
                       </Button>
                     </>
+                  }
+                />
+              </div>
+            </section>
+            <section aria-label="表示">
+              <h3 className="text-xs font-semibold text-muted-foreground">表示</h3>
+              <div>
+                <SettingsRow
+                  label="ビデオボタンを隠して横一列に並べる"
+                  description="音声パネルのビデオボタンを隠し、VoiceCord のボタンを純正のボタンと横一列に並べます。オフのときはサウンドボードの下に 2 段で並べます"
+                  control={
+                    <Switch
+                      aria-label="ビデオボタンを隠して横一列に並べる"
+                      checked={hideCamera}
+                      onCheckedChange={(checked) => patch({ hideCameraButton: checked })}
+                    />
                   }
                 />
               </div>

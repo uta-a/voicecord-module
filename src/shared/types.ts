@@ -70,6 +70,9 @@ export interface AppConfig {
   // 音源の一括均一化で目標にするラウドネス(dBFS)。声とのバランスから推奨する送信音量も
   // この値を基準に計算するため、両者で必ず同じ値を見る。
   normalizeRefDbfs: number
+  // 音声パネルのビデオ(カメラ)ボタンを隠し、VoiceCord のボタンを純正の列に横一列で並べる。
+  // 既定は ON。OFF のときはビデオボタンを残し、列の幅を分けないよう純正サウンドボードの下に 2 段で置く。
+  hideCameraButton: boolean
   // 直近の出力レベル計測。null = 未計測。目標プリセットを変えたときに再計測なしで
   // 推奨値を出し直すために保持する。
   calibration: CalibrationRecord | null

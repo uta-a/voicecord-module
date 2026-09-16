@@ -354,6 +354,17 @@ describe('createApi', () => {
     expect(seen).toEqual([])
   })
 
+  it('設定を保存すると、preload 側の購読者に保存した差分を渡す', async () => {
+    const ipc = fakeIpc()
+    const api = createApi(ipc, stereo)
+    const seen: unknown[] = []
+    const off = api.onConfigSaved((p) => seen.push(p))
+    await api.saveConfig({ hideCameraButton: true })
+    off()
+    await api.saveConfig({ hideCameraButton: false })
+    expect(seen).toEqual([{ hideCameraButton: true }])
+  })
+
   it('設定と再生の呼び口が正しいチャンネルに乗る', async () => {
     const ipc = fakeIpc()
     const api = createApi(ipc, stereo)

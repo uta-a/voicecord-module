@@ -46,6 +46,8 @@ export interface GraftDeps {
   ignoreWithin?: Node | null
   maxInserts?: number
   windowMs?: number
+  /** true なら純正の包みに入れず、列の直下(包みの隣)へ横一列に並べる。既定は false(2 段) */
+  inline?: () => boolean
 }
 
 export interface Graft {
@@ -170,15 +172,19 @@ export function createGraft(deps: GraftDeps): Graft {
     }, RETRY_AFTER_TRIP_MS)
   }
 
+  /** 包みの中へ 2 段に積むか。包みが無い構造と横一列の設定では積まない */
+  const stacked = (slot: HTMLElement, anchorEl: HTMLElement): boolean =>
+    slot !== anchorEl && !(deps.inline?.() ?? false)
+
   function sync(force = false): void {
     if (stopped || tripped) return
 
-    // 接ぎ木できていて、純正ボタンがまだ DOM にあり、所定の包み（旧構造では隣）にあれば探し直さない
+    // 接ぎ木できていて、純正ボタンがまだ DOM にあり、所定の位置にあれば探し直さない
     const attachedToSlot = (currentAnchor: HTMLElement, currentButton: HTMLElement): boolean => {
       const slot = slotOf(currentAnchor, currentButton)
-      return slot === currentAnchor
-        ? currentButton.previousElementSibling === slot
-        : currentButton.parentElement === slot
+      return stacked(slot, currentAnchor)
+        ? currentButton.parentElement === slot
+        : currentButton.previousElementSibling === slot
     }
 
     if (!force && button?.isConnected && anchor?.isConnected && attachedToSlot(anchor, button)) {
@@ -202,10 +208,8 @@ export function createGraft(deps: GraftDeps): Graft {
     else deps.refresh(button, hit.anchor)
 
     const slot = slotOf(hit.anchor, button)
-    if (
-      button.isConnected &&
-      (slot === hit.anchor ? button.previousElementSibling === slot : button.parentElement === slot)
-    ) {
+    const stack = stacked(slot, hit.anchor)
+    if (button.isConnected && (stack ? button.parentElement === slot : button.previousElementSibling === slot)) {
       emit()
       return
     }
@@ -220,14 +224,14 @@ export function createGraft(deps: GraftDeps): Graft {
     recent.push(t)
     inserts += 1
     // 純正ボタンが単独の包みに入っている場合は同じ包みへ追加し、横幅を分けず2段にする。
-    // 包みのない古い構造では、従来どおり列の隣へ追加して互換性を保つ。
+    // 包みのない古い構造と、ビデオボタンを隠して横一列にする設定では、列の隣へ追加する。
     // 2 段のときは純正ボタンと上下が接して見えるので、下段の自前ボタンに余白を付ける。
-    if (slot === hit.anchor) {
-      button.style.marginTop = ''
-      slot.after(button)
-    } else {
+    if (stack) {
       button.style.marginTop = '8px'
       slot.append(button)
+    } else {
+      button.style.marginTop = ''
+      slot.after(button)
     }
     emit()
   }

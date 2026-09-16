@@ -94,6 +94,13 @@ describe('parseConfigText', () => {
     expect(config.entryDelayMs).toBe(DFLT.entryDelayMs)
   })
 
+  it('ビデオボタンを隠す設定は既定で ON、真偽値でなければ既定へ戻す', () => {
+    expect(DFLT.hideCameraButton).toBe(true)
+    expect(parseConfigText(JSON.stringify({}), DFLT).config.hideCameraButton).toBe(true)
+    expect(parseConfigText(JSON.stringify({ hideCameraButton: false }), DFLT).config.hideCameraButton).toBe(false)
+    expect(parseConfigText(JSON.stringify({ hideCameraButton: 'false' }), DFLT).config.hideCameraButton).toBe(true)
+  })
+
   it('音源別音量は非数値を落として 0〜1.5 に収める', () => {
     const { config } = parseConfigText(
       JSON.stringify({ sourceVolumes: { a: 0.5, b: 'x', c: 9, d: -2 } }),

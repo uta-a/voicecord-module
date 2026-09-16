@@ -159,6 +159,7 @@ describe('UI のマウント', () => {
       'モニター',
       '入場サウンド',
       'サウンドフォルダ',
+      '表示',
       '接続状態'
     ])
     expect(pop.querySelector('[role="tablist"]')).toBeNull()
@@ -334,6 +335,27 @@ describe('UI のマウント', () => {
     await act(async () => {
       usePopout.getState().setOpen(false)
     })
+  })
+
+  it('表示の行でビデオボタンを隠して横一列に並べる設定をオンオフできる', async () => {
+    const before = useStore.getState().settings.hideCameraButton
+    try {
+      await openSettings({ status: null, anchorInfo: null })
+      const sw = shell.portal.querySelector<HTMLButtonElement>(
+        'button[role="switch"][aria-label="ビデオボタンを隠して横一列に並べる"]'
+      )!
+      expect(sw).not.toBeNull()
+      expect(sw.getAttribute('aria-checked')).toBe(String(before))
+      await act(async () => {
+        sw.click()
+      })
+      expect(useStore.getState().settings.hideCameraButton).toBe(!before)
+    } finally {
+      await act(async () => {
+        useStore.getState().patchSettings({ hideCameraButton: before })
+        usePopout.getState().setOpen(false)
+      })
+    }
   })
 
   it('入場サウンドの行でオンオフでき、「設定」でダイアログが開く', async () => {
