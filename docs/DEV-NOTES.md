@@ -226,6 +226,7 @@ M6 の portable ビルドは `npm run build` と electron-builder が完了し�
 portable exe の受け入れで、Canary 1.0.1173 の app.asar は VoiceCord と Vencord の連鎖を実際に持つのに、state.json の 1.0.1169 記録から「更新されて外れています」と誤警告した。`listInstalls` は実物の `active` が true なら staleVersion を立てないよう修正。service テスト 21 件、型チェック、ビルドに成功し、2026-09-15 22:19 に再生成した portable exe で誤警告が消えた。
 
 OS 通知確認用に一般テキストチャンネルへ `@uta_a 通知回帰確認` を送信済み。送信側 Canary で表示を確認。受信側の通知バナー・通知音の評価待ち。
+受信側から通知到着の報告を受けた。通知音の有無は未確認。
 
 検証用スクリプトでパス区切りを混在させると、planPatch の samePath が大小文字だけを比較するため
 同じ patcher を別の連鎖項目として保持することも分かった。
@@ -233,3 +234,10 @@ OS 通知確認用に一般テキストチャンネルへ `@uta_a 通知回帰�
 製品側のパス比較の修正とテストは別の残件として記録する。
 
 パス比較の残件は `path.win32.normalize` を使う修正で解消した。同じ patcher の `/` と `\\` を同一視する適用テストを追加し、`test/apply.test.ts` の 20 件と型チェックが成功した。
+## M5→M6→M7 実機ログ（2026-09-16）
+
+M5 は Canary 1.0.1173 で engine kill 後の自動復帰（failed→starting→searching→attached）と更新再起動を確認した。M6 は portable マネージャーの適用・VoiceCord 単独削除・他 mod 引き継ぎ・全復元を一巡し、同一 payload の再コピー回避と古い branch 記録の除去を追加した。
+
+M7 では Stable 1.0.9257 の renderer/audio に `KrispNCProcessFloat`（48 kHz / 480 samples）が実際に呼ばれることを確認した。chime の校正は 900 frames、clip 0、注入 RMS 0.00697。engine PID 37368 を終了させた後、4.47 秒で PID 37924 に再接続し、修正後の master 2.031588 が再接続後の校正イベントにも残った。
+
+受信側の DOM 上の speaking 表示は今回変化せず、実際に耳で聞こえたことの確認は未取得。したがって送信経路・復帰・音量復元は完了、受信音の人的確認のみ保留とする。
