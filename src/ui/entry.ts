@@ -38,6 +38,8 @@ export interface UiController {
   notify: (msg: string) => void
   /** 純正サウンドボードで押された、Nitro が必要なサウンドを VoiceCord から鳴らす */
   playSoundboardSound: (sound: { soundId: string; name: string }) => void
+  /** VoiceCord で鳴らしている音をすべて止める（純正サウンドボードの停止ボタンから） */
+  stopAll: () => void
 }
 
 /** DOM が使えるようになってから呼ぶこと */
@@ -73,6 +75,7 @@ export function mount(container: HTMLElement): UiController {
     },
     playSoundboardSound: ({ soundId, name }) => {
       void useStore.getState().playSoundboardSound(soundId, name)
-    }
+    },
+    stopAll: () => useStore.getState().stopAll()
   }
 }

@@ -20,6 +20,12 @@ import {
   setSoundboardUnlocked,
   UNLOCK_SOUNDBOARD_CSS
 } from './lockedSounds.js'
+import {
+  buildSoundboardStopButton,
+  findSoundboardVolumeButton,
+  SOUNDBOARD_STOP_LABEL,
+  wireSoundboardStopButton
+} from './soundboardStop.js'
 
 /**
  * Discord の renderer に載る preload。isolated world で動く。
@@ -361,6 +367,32 @@ function main(): void {
       .catch((e: unknown) => console.error('[VoiceCord] 設定を読めませんでした', e))
 
     graft.start()
+
+    // 純正サウンドボードのヘッダーに置く「VoiceCord の音をすべて停止」。鳴らす先の UI が無ければ出さない
+    if (ui) {
+      const stopAll = ui.stopAll
+      const stopGraft = createGraft({
+        doc: document,
+        ignoreWithin: sh.root,
+        find: () => findSoundboardVolumeButton(document, sh.root),
+        build: (volume) =>
+          wireSoundboardStopButton(buildSoundboardStopButton(document, volume), {
+            stopAll,
+            showTip: (b) => sh.showTip(b, SOUNDBOARD_STOP_LABEL),
+            hideTip: () => sh.hideTip()
+          }),
+        // ヘッダーの子は検索欄と音量アイコンの 2 つなので、音量アイコンの直後に並べる
+        inline: () => true,
+        refresh: refreshGraftButton,
+        onChange: (s) => {
+          // ダイアログごと外されると pointerleave / blur が来ないので、ツールチップをここで消す
+          if (s.button === null) sh.hideTip()
+          if (s.tripped) console.warn('[VoiceCord] サウンドボードの停止ボタンの再挿入が多すぎるため中断しました')
+        },
+        now: () => Date.now()
+      })
+      stopGraft.start()
+    }
 
     // UI のマウントに失敗していたら、その理由も状態に混ぜて出す
     const applyStatus = (s: VoiceCordStatus): void => {
