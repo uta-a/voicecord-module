@@ -207,7 +207,9 @@ function main(): void {
 
     const update = (): void => {
       // 引き直しの要求は非同期で投げられるので、この処理の途中で状態が書き換わることはない
-      if (graftState.tier !== null && graftState.tier > 1) {
+      // tier 2 は actionButtons の安定したハッシュ接頭辞による検出で、通常の更新範囲。
+      // tier 3/4（ラベル・構造だけ）まで落ちた場合だけ予備検出の警告を出す。
+      if (graftState.tier !== null && graftState.tier > 2) {
         harvest.request()
         if (lowTierSeenAt < 0) lowTierSeenAt = harvest.results()
       } else if (graftState.tier === 1) {
@@ -253,7 +255,7 @@ function main(): void {
         ui &&
         !warnedTier &&
         s.tier !== null &&
-        s.tier > 1 &&
+        s.tier > 2 &&
         lowTierSeenAt >= 0 &&
         harvest.results() > lowTierSeenAt
       ) {

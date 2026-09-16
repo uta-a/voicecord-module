@@ -85,8 +85,8 @@ describe('buildGraftButton', () => {
   })
 
   // 回帰: 実機（Canary 1.0.1169）の純正ボタンは、ツールチップ用の無名 div に 1 つだけ
-  // 包まれている。包みの中へ差し込むと、ボタンが横に並ばず純正の下に縦に積まれた
-  it('純正ボタンが単独の包みに入っていれば、包みの外（ボタン列の直下）に並べる', () => {
+  // 包まれている。VoiceCord は同じ包みへ差し込み、横幅を分けず純正の下に縦に積む。
+  it('純正ボタンが単独の包みに入っていれば、同じ包みの中に2段で並べる', () => {
     document.body.innerHTML = `<div class="container_e131a9"><div class="actionButtons_e131a9">
       <button class="button_e131a9"></button><span class="hiddenVisually_b18fe2">カメラ</span>
       <button class="button_e131a9"></button><span class="hiddenVisually_b18fe2">画面</span>
@@ -97,11 +97,16 @@ describe('buildGraftButton', () => {
     h.graft.start()
     const row = document.querySelector('.actionButtons_e131a9')!
     const btn = document.querySelector(`[${GRAFT_ATTR}]`)!
-    expect(btn.parentElement).toBe(row)
-    expect(btn.previousElementSibling?.querySelector('[aria-label="サウンドボードを開く"]')).not.toBeNull()
-    // 揃った後の同期では挿入し直さない（隣接の判定も包み基準）
+    const slot = document.querySelector('[aria-label="サウンドボードを開く"]')?.parentElement
+    expect(slot?.parentElement).toBe(row)
+    expect(btn.parentElement).toBe(slot)
+    expect(slot?.querySelector('[aria-label="サウンドボードを開く"]')).not.toBeNull()
+    // 2 段に積むと純正ボタンと接して見えるので、下段の自前ボタンに上の余白を付ける
+    expect((btn as HTMLElement).style.marginTop).toBe('8px')
+    // 2 段配置後の強制同期でも自前ボタンを除外して純正側へ降り、tier 2 を保つ
     const inserts = h.graft.state().inserts
-    h.graft.sync(false)
+    h.graft.sync(true)
+    expect(h.graft.state().tier).toBe(2)
     expect(h.graft.state().inserts).toBe(inserts)
     // 止めないと observer が残り、後続のテストの DOM に挿し込んでしまう
     h.graft.stop()
@@ -121,6 +126,8 @@ describe('createGraft', () => {
     expect(s.tier).toBe(2)
     expect(s.button?.previousElementSibling?.getAttribute('aria-label')).toBe('サウンドボードを開く')
     expect(s.inserts).toBe(1)
+    // 横に並ぶ旧構造では余白を足さない（純正の列の間隔に任せる）
+    expect(s.button?.style.marginTop).toBe('')
     h.graft.stop()
   })
 

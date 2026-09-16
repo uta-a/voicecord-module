@@ -10,7 +10,7 @@ import {
  * 純正のサウンドボードボタン（アンカー）を探す。
  *
  * 上の段から順に試し、**何段目で見つかったかを返す**。下の段ほど Discord の更新で
- * 壊れやすいので、2 段目以下に落ちたことは「まだ動くが次の更新で出なくなりうる」の
+ * 壊れやすいので、3/4 段目に落ちたことは「まだ動くが次の更新で出なくなりうる」の
  * 前兆として状態に出す。
  *
  *   1. 採取役が webpack から引いた CSS モジュールのクラス名（Vencord と同じ根拠）
@@ -66,9 +66,11 @@ function directButtons(container: Element, ignoreWithin: Node | null | undefined
   for (const child of Array.from(container.children)) {
     let candidate = child
     // 純正ボタンはツールチップの単独 div に包まれる。任意の子孫探索には広げない。
-    for (let depth = 0; depth < 4 && candidate.tagName === 'DIV' && candidate.children.length === 1; depth++) {
+    for (let depth = 0; depth < 4 && candidate.tagName === 'DIV'; depth++) {
       if (isOurs(candidate, ignoreWithin)) break
-      candidate = candidate.children[0]!
+      const children = Array.from(candidate.children).filter((c) => !isOurs(c, ignoreWithin))
+      if (children.length !== 1) break
+      candidate = children[0]!
     }
     if (candidate.tagName === 'BUTTON' && !isOurs(candidate, ignoreWithin)) out.push(candidate as HTMLElement)
   }

@@ -53,6 +53,13 @@ describe('findSoundboardAnchor', () => {
     expect(hit?.anchor.getAttribute('aria-label')).toBe('サウンドボードを開く')
   })
 
+  it('1 段目: 自前ボタン同居のラッパーから純正ボタンへ降りる', () => {
+    document.body.innerHTML = `<div class="actionButtons_e131a9"><div><button aria-label="サウンドボードを開く"></button><button ${GRAFT_ATTR}="graft" aria-label="VoiceCord"></button></div></div>`
+    const hit = findSoundboardAnchor(document, { classes: { actionButtons: 'actionButtons_e131a9' } })
+    expect(hit?.tier).toBe(1)
+    expect(hit?.anchor.getAttribute('aria-label')).toBe('サウンドボードを開く')
+  })
+
   it('2 段目: 採取役が無ければハッシュ前の部分で見つける', () => {
     document.body.innerHTML = voicePanel()
     const hit = findSoundboardAnchor(document, { classes: null })

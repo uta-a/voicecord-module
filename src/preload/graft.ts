@@ -173,13 +173,15 @@ export function createGraft(deps: GraftDeps): Graft {
   function sync(force = false): void {
     if (stopped || tripped) return
 
-    // 接ぎ木できていて、純正ボタンがまだ DOM にあり、隣にいるなら探し直さない
-    if (
-      !force &&
-      button?.isConnected &&
-      anchor?.isConnected &&
-      button.previousElementSibling === slotOf(anchor, button)
-    ) {
+    // 接ぎ木できていて、純正ボタンがまだ DOM にあり、所定の包み（旧構造では隣）にあれば探し直さない
+    const attachedToSlot = (currentAnchor: HTMLElement, currentButton: HTMLElement): boolean => {
+      const slot = slotOf(currentAnchor, currentButton)
+      return slot === currentAnchor
+        ? currentButton.previousElementSibling === slot
+        : currentButton.parentElement === slot
+    }
+
+    if (!force && button?.isConnected && anchor?.isConnected && attachedToSlot(anchor, button)) {
       deps.refresh(button, anchor)
       emit()
       return
@@ -200,7 +202,10 @@ export function createGraft(deps: GraftDeps): Graft {
     else deps.refresh(button, hit.anchor)
 
     const slot = slotOf(hit.anchor, button)
-    if (button.isConnected && button.previousElementSibling === slot) {
+    if (
+      button.isConnected &&
+      (slot === hit.anchor ? button.previousElementSibling === slot : button.parentElement === slot)
+    ) {
       emit()
       return
     }
@@ -214,7 +219,16 @@ export function createGraft(deps: GraftDeps): Graft {
     }
     recent.push(t)
     inserts += 1
-    slot.after(button)
+    // 純正ボタンが単独の包みに入っている場合は同じ包みへ追加し、横幅を分けず2段にする。
+    // 包みのない古い構造では、従来どおり列の隣へ追加して互換性を保つ。
+    // 2 段のときは純正ボタンと上下が接して見えるので、下段の自前ボタンに余白を付ける。
+    if (slot === hit.anchor) {
+      button.style.marginTop = ''
+      slot.after(button)
+    } else {
+      button.style.marginTop = '8px'
+      slot.append(button)
+    }
     emit()
   }
 
