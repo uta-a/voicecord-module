@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createEngineCore, PRELOAD_MAX, sourceKey, type EngineCore } from '../src/engine/core.js'
 import type { Injector } from '../src/engine/injector.js'
 import { FridaGate, type GateTarget } from '../src/engine/transmit.js'
-import type { EngineEvent, PlayReq } from '../src/shared/types.js'
+import type { EngineEvent, InjectPlayReq } from '../src/shared/types.js'
 
 /**
  * エンジン統括。
@@ -50,49 +50,76 @@ function fake(): Fake {
   return { core, calls, gate, setAttached: (v) => void (attached = v) }
 }
 
-const req = (srcId: string, fp = '1_2'): PlayReq => ({
+const RATE = 48000
+
+const req = (srcId: string, fp = '1_2', sampleRate = RATE): InjectPlayReq => ({
   srcId,
   path: `C:/sounds/${srcId}.wav`,
   fp,
-  vol: 1
+  vol: 1,
+  sampleRate
 })
 
 const pcm = (): Buffer => Buffer.alloc(16)
 
 describe('sourceKey', () => {
   it('指紋を混ぜる（同名で差し替えても旧 PCM を鳴らさない）', () => {
-    expect(sourceKey('a', '1_2')).toBe('a@1_2')
-    expect(sourceKey('a', '3_4')).not.toBe(sourceKey('a', '1_2'))
+    expect(sourceKey('a', '1_2', RATE)).toBe('a@1_2@48000')
+    expect(sourceKey('a', '3_4', RATE)).not.toBe(sourceKey('a', '1_2', RATE))
+  })
+
+  it('注入レートを混ぜる（既定レートで送った PCM を計測後に使い回さない）', () => {
+    expect(sourceKey('a', '1_2', 32000)).not.toBe(sourceKey('a', '1_2', RATE))
   })
 })
 
 describe('preloadPcm', () => {
   it('初回は hook へ送る', () => {
     const f = fake()
-    expect(f.core.preloadPcm('a', '1_2', pcm())).toEqual({ key: 'a@1_2', sent: true })
-    expect(f.calls).toEqual(['preload:a@1_2'])
+    expect(f.core.preloadPcm('a', '1_2', RATE, pcm())).toEqual({ key: 'a@1_2@48000', sent: true })
+    expect(f.calls).toEqual(['preload:a@1_2@48000'])
   })
 
   it('2 回目は送り直さない（1MB を Discord のプロセスへ投げ直さない）', () => {
     const f = fake()
-    f.core.preloadPcm('a', '1_2', pcm())
-    expect(f.core.preloadPcm('a', '1_2', pcm())).toEqual({ key: 'a@1_2', sent: false })
-    expect(f.calls).toEqual(['preload:a@1_2'])
+    f.core.preloadPcm('a', '1_2', RATE, pcm())
+    expect(f.core.preloadPcm('a', '1_2', RATE, pcm())).toEqual({ key: 'a@1_2@48000', sent: false })
+    expect(f.calls).toEqual(['preload:a@1_2@48000'])
   })
 
   it('噛んでいなければ理由つきで断る', () => {
     const f = fake()
     f.setAttached(false)
-    expect(() => f.core.preloadPcm('a', '1_2', pcm())).toThrow(/噛んでいません/)
+    expect(() => f.core.preloadPcm('a', '1_2', RATE, pcm())).toThrow(/噛んでいません/)
+  })
+
+  it('レートが変わったら同じ音源でも送り直し、新しいレートの PCM を鳴らす', () => {
+    const f = fake()
+    f.core.preloadPcm('a', '1_2', 32000, pcm())
+    f.core.play(req('a', '1_2', 32000))
+    expect(f.core.preloadPcm('a', '1_2', RATE, pcm())).toEqual({ key: 'a@1_2@48000', sent: true })
+    f.core.play(req('a'))
+    expect(f.calls).toEqual([
+      'preload:a@1_2@32000',
+      'play:a@1_2@32000',
+      'preload:a@1_2@48000',
+      'play:a@1_2@48000'
+    ])
   })
 })
 
 describe('play', () => {
   it('プリロード済みなら鳴らす', () => {
     const f = fake()
-    f.core.preloadPcm('a', '1_2', pcm())
+    f.core.preloadPcm('a', '1_2', RATE, pcm())
     expect(f.core.play(req('a'))).not.toBeNull()
-    expect(f.calls).toContain('play:a@1_2')
+    expect(f.calls).toContain('play:a@1_2@48000')
+  })
+
+  it('別のレートでしかプリロードされていなければ鳴らさない（ピッチ違いを鳴らさない）', () => {
+    const f = fake()
+    f.core.preloadPcm('a', '1_2', 32000, pcm())
+    expect(() => f.core.play(req('a'))).toThrow(/hook 側にありません/)
   })
 
   it('プリロードされていなければ理由を返す（無言で鳴らないを作らない）', () => {
@@ -110,62 +137,71 @@ describe('play', () => {
 describe('常駐音源の上限', () => {
   it(`${PRELOAD_MAX} 件を超えたら古い順に落とす`, () => {
     const f = fake()
-    for (let i = 0; i <= PRELOAD_MAX; i++) f.core.preloadPcm(`s${i}`, 'x', pcm())
+    for (let i = 0; i <= PRELOAD_MAX; i++) f.core.preloadPcm(`s${i}`, 'x', RATE, pcm())
     expect(f.core.preloadedCount()).toBe(PRELOAD_MAX)
     // いちばん古い s0 が落ちる
-    expect(f.calls).toContain('unload:s0@x')
+    expect(f.calls).toContain('unload:s0@x@48000')
   })
 
   it('鳴っている音源は落とさない（途中で音が消える）', () => {
     const f = fake()
-    f.core.preloadPcm('s0', 'x', pcm())
+    f.core.preloadPcm('s0', 'x', RATE, pcm())
     f.core.play(req('s0', 'x'))
-    for (let i = 1; i <= PRELOAD_MAX; i++) f.core.preloadPcm(`s${i}`, 'x', pcm())
-    expect(f.calls).not.toContain('unload:s0@x')
+    for (let i = 1; i <= PRELOAD_MAX; i++) f.core.preloadPcm(`s${i}`, 'x', RATE, pcm())
+    expect(f.calls).not.toContain('unload:s0@x@48000')
     // 代わりに次に古いものが落ちる
-    expect(f.calls).toContain('unload:s1@x')
+    expect(f.calls).toContain('unload:s1@x@48000')
+  })
+
+  it('レートが変わる前の PCM も上限に数え、使われなければ古い順に落とす', () => {
+    const f = fake()
+    f.core.preloadPcm('s0', 'x', 32000, pcm())
+    f.core.preloadPcm('s0', 'x', RATE, pcm())
+    for (let i = 1; i < PRELOAD_MAX; i++) f.core.preloadPcm(`s${i}`, 'x', RATE, pcm())
+    expect(f.core.preloadedCount()).toBe(PRELOAD_MAX)
+    expect(f.calls.filter((c) => c.startsWith('unload:'))).toEqual(['unload:s0@x@32000'])
   })
 
   it('使うたびに並べ直す（LRU）', () => {
     const f = fake()
-    f.core.preloadPcm('s0', 'x', pcm())
-    for (let i = 1; i < PRELOAD_MAX; i++) f.core.preloadPcm(`s${i}`, 'x', pcm())
+    f.core.preloadPcm('s0', 'x', RATE, pcm())
+    for (let i = 1; i < PRELOAD_MAX; i++) f.core.preloadPcm(`s${i}`, 'x', RATE, pcm())
     // s0 を使い直してから溢れさせる
-    f.core.preloadPcm('s0', 'x', pcm())
-    f.core.preloadPcm('last', 'x', pcm())
-    expect(f.calls).not.toContain('unload:s0@x')
-    expect(f.calls).toContain('unload:s1@x')
+    f.core.preloadPcm('s0', 'x', RATE, pcm())
+    f.core.preloadPcm('last', 'x', RATE, pcm())
+    expect(f.calls).not.toContain('unload:s0@x@48000')
+    expect(f.calls).toContain('unload:s1@x@48000')
   })
 })
 
 describe('hook とのズレからの復帰', () => {
   it('no source と言われたら記録を落とし、次の再生で送り直す', () => {
     const f = fake()
-    f.core.preloadPcm('a', '1_2', pcm())
+    f.core.preloadPcm('a', '1_2', RATE, pcm())
     const vid = f.core.play(req('a')) as string
-    f.core.onHookEvent({ ev: 'playRejected', voiceId: vid, reason: 'no source: a@1_2' })
+    f.core.onHookEvent({ ev: 'playRejected', voiceId: vid, reason: 'no source: a@1_2@48000' })
     // 記録が落ちているので、そのまま play すると断られる
     expect(() => f.core.play(req('a'))).toThrow(/hook 側にありません/)
     // 送り直せば鳴る
-    expect(f.core.preloadPcm('a', '1_2', pcm()).sent).toBe(true)
+    expect(f.core.preloadPcm('a', '1_2', RATE, pcm()).sent).toBe(true)
   })
 
   it('普通に鳴り終わったときは記録を落とさない', () => {
     const f = fake()
-    f.core.preloadPcm('a', '1_2', pcm())
+    f.core.preloadPcm('a', '1_2', RATE, pcm())
     const vid = f.core.play(req('a')) as string
     f.core.onHookEvent({ ev: 'voiceEnded', voiceId: vid })
     expect(f.core.preloadedCount()).toBe(1)
-    expect(f.core.preloadPcm('a', '1_2', pcm()).sent).toBe(false)
+    expect(f.core.preloadPcm('a', '1_2', RATE, pcm()).sent).toBe(false)
   })
 
   it('鳴り終わった voice は退避の保護から外れる', () => {
     const f = fake()
-    f.core.preloadPcm('s0', 'x', pcm())
+    f.core.preloadPcm('s0', 'x', RATE, pcm())
     const vid = f.core.play(req('s0', 'x')) as string
     f.core.onHookEvent({ ev: 'voiceEnded', voiceId: vid })
-    for (let i = 1; i <= PRELOAD_MAX; i++) f.core.preloadPcm(`s${i}`, 'x', pcm())
-    expect(f.calls).toContain('unload:s0@x')
+    for (let i = 1; i <= PRELOAD_MAX; i++) f.core.preloadPcm(`s${i}`, 'x', RATE, pcm())
+    expect(f.calls).toContain('unload:s0@x@48000')
   })
 })
 
@@ -185,7 +221,7 @@ describe('hook のイベントをゲートへ回す', () => {
 
   it('detached でゲートを戻し、hook 側の記録も捨てる', () => {
     const f = fake()
-    f.core.preloadPcm('a', '1_2', pcm())
+    f.core.preloadPcm('a', '1_2', RATE, pcm())
     f.core.onHookEvent({ ev: 'activity', playing: true })
     f.core.onHookEvent({ ev: 'detached', reason: 'process-terminated' })
     expect(f.core.preloadedCount()).toBe(0)
@@ -212,7 +248,7 @@ describe('セッションの張り直し', () => {
   it('記録を捨てて master を入れ直す（新しい hook は 1.0 で始まる）', () => {
     const f = fake()
     f.core.setMaster(2.5)
-    f.core.preloadPcm('a', '1_2', pcm())
+    f.core.preloadPcm('a', '1_2', RATE, pcm())
     f.core.resetSession()
     expect(f.core.preloadedCount()).toBe(0)
     expect(f.calls.filter((c) => c === 'master:2.5')).toHaveLength(2)

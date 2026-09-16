@@ -37,6 +37,12 @@ export interface PlayReq {
   vol: number
 }
 
+// preload → engine の再生要求。UI は注入レートを知らないので PlayReq とは分ける。
+// engine は srcId / fp / sampleRate でプリロード済み PCM を引く(レートが変わったら別の音源として送り直す)。
+export interface InjectPlayReq extends PlayReq {
+  sampleRate: number
+}
+
 // 永続化する設定(Electron userData/config.json)。getConfig で renderer へ返す。
 export interface AppConfig {
   build: BuildKey

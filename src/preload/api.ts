@@ -6,6 +6,7 @@ import type {
   AttachResult,
   BuildKey,
   EngineEvent,
+  InjectPlayReq,
   LoadedConfig,
   PlayReq,
   SoundItem,
@@ -38,6 +39,13 @@ import {
 /** attach の結果が落ち着くまで待つ回数と間隔（合計 3 秒） */
 export const ATTACH_SETTLE_TRIES = 20
 export const ATTACH_SETTLE_INTERVAL_MS = 150
+/**
+ * 注入レートが未計測のときに待つ回数と間隔（合計 300ms）。
+ * 長く待つとその間のクリックが溜まり、計測と同時に一斉に鳴る。
+ * 待ち切れなければビルド既定で進み、計測後は engine がレート別に送り直す
+ */
+const RATE_WAIT_TRIES = 3
+const RATE_WAIT_INTERVAL_MS = 100
 
 export interface IpcRendererLike {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
@@ -65,6 +73,9 @@ export function createApi(
 
   /** 実測された注入レート。状態が届くまでは分からない */
   let injectRate: number | null = null
+  /** engine 再起動後に戻す、直前の送信マスター音量。 */
+  let master: number | null = null
+  let masterEnginePid: number | null = null
 
   const rateFromFrame = (frameSamples: number | null | undefined): number | null => {
     if (!Number.isInteger(frameSamples) || frameSamples === undefined || frameSamples === null) return null
@@ -76,15 +87,24 @@ export function createApi(
     build === 'canary' ? 32000 : PREVIEW_SAMPLE_RATE
 
   /**
-   * 注入に使うレート。状態から取れなければ getStatus で一度だけ聞きに行く。
-   * それでも取れなければ試聴と同じ 48000 で進む（黙って止めるよりは鳴らす）。
+   * 注入に使うレート。状態から取れなければ getStatus で聞きに行き、ごく短時間だけ待つ。
+   * それでも取れなければビルド既定で進む（黙って止めるよりは鳴らす）。
    */
   const rateForInject = async (): Promise<number> => {
     if (injectRate !== null) return injectRate
     try {
-      const s = await call<VoiceCordStatus>(CH.getStatus)
-      if (s.sampleRate !== null) injectRate = s.sampleRate
-      else injectRate = rateFromFrame(s.frameSamples) ?? fallbackRateForBuild(s.discordBuild)
+      let s = await call<VoiceCordStatus>(CH.getStatus)
+      for (
+        let i = 0;
+        i < RATE_WAIT_TRIES && s.engine === 'attached' && s.enginePid !== null && injectRate === null;
+        i++
+      ) {
+        injectRate = s.sampleRate ?? rateFromFrame(s.frameSamples)
+        if (injectRate !== null) break
+        await new Promise((resolve) => setTimeout(resolve, RATE_WAIT_INTERVAL_MS))
+        s = await call<VoiceCordStatus>(CH.getStatus)
+      }
+      if (injectRate === null) injectRate = fallbackRateForBuild(s.discordBuild)
     } catch {
       // 取れなくても既定値で進む
     }
@@ -114,6 +134,11 @@ export function createApi(
   onEvent((e) => {
     if (e.ev === 'status') {
       injectRate = e.status.sampleRate ?? rateFromFrame(e.status.frameSamples)
+      const pid = e.status.enginePid
+      if (e.status.engine === 'attached' && pid !== null && pid !== masterEnginePid) {
+        masterEnginePid = pid
+        if (master !== null) void call<void>(CH.setMaster, master).catch(() => undefined)
+      }
     }
   })
 
@@ -166,18 +191,24 @@ export function createApi(
     },
 
     play: async (req: PlayReq): Promise<string | null> => {
-      // 鳴らす直前に PCM を engine へ渡す。engine は fp をキーに持つので、
-      // 同じ音源を連打しても 2 回目以降は hook へ送り直さない。
+      // 鳴らす直前に PCM を engine へ渡す。engine は音源とレートをキーに持つので、
+      // 同じ音源を同じレートで連打しても 2 回目以降は hook へ送り直さない。
       // **ここだけ注入レートでデコードする**（試聴の 48000 とは別）
-      const pcm = await pcmAt(req.path, await rateForInject())
-      // キーは engine 側が srcId@fp で作る。指紋だけだと別音源が同じ内容のとき衝突する
-      await call<void>(CH.preloadPcm, req.srcId, req.fp, pcm.buffer)
-      return call<string | null>(CH.play, req)
+      const sampleRate = await rateForInject()
+      const pcm = await pcmAt(req.path, sampleRate)
+      // キーは engine 側が srcId@fp@rate で作る。指紋だけだと別音源が同じ内容のとき衝突し、
+      // レートを混ぜないと既定レートで送った PCM を計測後も使い回してピッチがずれる
+      await call<void>(CH.preloadPcm, req.srcId, req.fp, sampleRate, pcm.buffer)
+      const injectReq: InjectPlayReq = { ...req, sampleRate }
+      return call<string | null>(CH.play, injectReq)
     },
     stop: (vid: string) => call<void>(CH.stop, vid),
     stopAll: () => call<void>(CH.stopAll),
     setVoiceVolume: (vid: string, vol: number) => call<void>(CH.setVoiceVolume, vid, vol),
-    setMaster: (v: number) => call<void>(CH.setMaster, v),
+    setMaster: (v: number) => {
+      master = v
+      return call<void>(CH.setMaster, v)
+    },
     openGate: (guardMs: number) => call<void>(CH.openGate, guardMs),
 
     calibStart: (tag: string, frames: number) => call<void>(CH.calibStart, tag, frames),

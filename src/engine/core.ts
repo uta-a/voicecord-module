@@ -1,4 +1,4 @@
-import type { EngineEvent, PlayReq } from '../shared/types.js'
+import type { EngineEvent, InjectPlayReq } from '../shared/types.js'
 import type { Injector } from './injector.js'
 import type { FridaGate } from './transmit.js'
 
@@ -19,17 +19,21 @@ import type { FridaGate } from './transmit.js'
  */
 export const PRELOAD_MAX = 48
 
-/** 音源キー。指紋を混ぜるので、同名で差し替えても旧 PCM を鳴らさない */
-export function sourceKey(srcId: string, fp: string): string {
-  return `${srcId}@${fp}`
+/**
+ * 音源キー。指紋を混ぜるので、同名で差し替えても旧 PCM を鳴らさない。
+ * 注入レートも混ぜる。未計測時の既定レートで送った PCM を、計測後も使い回すと
+ * 再アタッチまでピッチと速度がずれたままになる。古いレートの分は LRU で退避される
+ */
+export function sourceKey(srcId: string, fp: string, sampleRate: number): string {
+  return `${srcId}@${fp}@${sampleRate}`
 }
 
 export interface EngineCore {
   /** hook.js から来たイベントを捌く。ゲートへ回し、上へ流す */
   onHookEvent(p: EngineEvent): void
   /** renderer がデコードした PCM を hook へ渡す */
-  preloadPcm(srcId: string, fp: string, pcm: Buffer): { key: string; sent: boolean }
-  play(req: PlayReq): string | null
+  preloadPcm(srcId: string, fp: string, sampleRate: number, pcm: Buffer): { key: string; sent: boolean }
+  play(req: InjectPlayReq): string | null
   stop(voiceId: string): void
   stopAll(): void
   setVoiceVolume(voiceId: string, vol: number): void
@@ -114,8 +118,8 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
       emit(p)
     },
 
-    preloadPcm: (srcId, fp, pcm) => {
-      const key = sourceKey(srcId, fp)
+    preloadPcm: (srcId, fp, sampleRate, pcm) => {
+      const key = sourceKey(srcId, fp, sampleRate)
       if (preloaded.has(key)) {
         // 既に hook 側に載っている。使った順に並べ直すだけで、Discord の
         // プロセスへ 1MB を投げ直さない
@@ -132,7 +136,7 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
 
     play: (req) => {
       if (!inj.attached) throw new Error('audio プロセスに噛んでいません')
-      const key = sourceKey(req.srcId, req.fp)
+      const key = sourceKey(req.srcId, req.fp, req.sampleRate)
       if (!preloaded.has(key)) {
         // 呼び出し側が preload を忘れた、あるいは間に再アタッチが挟まった。
         // 無言で null を返すと「押しても鳴らない」だけになるので理由を返す

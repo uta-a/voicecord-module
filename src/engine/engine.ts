@@ -2,7 +2,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ENGINE_EMERGENCY_STOP } from '../shared/engineMsg.js'
 import type { EngineState } from '../shared/ipc.js'
-import type { EngineEvent, PlayReq } from '../shared/types.js'
+import type { EngineEvent, InjectPlayReq } from '../shared/types.js'
 import { createEngineCore, type EngineCore } from './core.js'
 import { Injector, listProcesses, loadFrida, probePid } from './injector.js'
 import { createSupervisor, type Supervisor } from './supervisor.js'
@@ -141,6 +141,11 @@ function need(): EngineCore {
   return core
 }
 
+/** preload が送ってくる注入レート。音源キーの一部なので正の整数に限る */
+function isInjectRate(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v > 0
+}
+
 const handlers: Record<string, Handler> = {
   'voicecord:detach': async () => {
     // 手動で離す。以後この起動では自動で噛み直さない
@@ -152,15 +157,22 @@ const handlers: Record<string, Handler> = {
     setState('searching', null, null)
   },
 
-  'voicecord:preload': ([srcId, fp, pcm]) => {
+  'voicecord:preload': ([srcId, fp, sampleRate, pcm]) => {
     if (typeof srcId !== 'string' || typeof fp !== 'string') {
       throw new Error('音源の指定が不正です')
     }
+    if (!isInjectRate(sampleRate)) throw new Error('注入レートの指定が不正です')
     if (!(pcm instanceof ArrayBuffer)) throw new Error('PCM が届いていません')
-    return need().preloadPcm(srcId, fp, Buffer.from(pcm))
+    return need().preloadPcm(srcId, fp, sampleRate, Buffer.from(pcm))
   },
 
-  'voicecord:play': ([req]) => need().play(req as PlayReq),
+  'voicecord:play': ([req]) => {
+    // レート抜きの要求はどのプリロードにも当たらない。黙って外さず理由を返す
+    if (!isInjectRate((req as Partial<InjectPlayReq> | undefined)?.sampleRate)) {
+      throw new Error('注入レートの指定が不正です')
+    }
+    return need().play(req as InjectPlayReq)
+  },
   'voicecord:stop': ([vid]) => need().stop(String(vid)),
   'voicecord:stopAll': () => need().stopAll(),
   'voicecord:setVoiceVolume': ([vid, vol]) => need().setVoiceVolume(String(vid), Number(vol)),

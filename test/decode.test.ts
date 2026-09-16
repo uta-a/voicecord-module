@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createApi, type IpcRendererLike } from '../src/preload/api.js'
 import type { AudioDecoder } from '../src/preload/decode.js'
 import { decodeToMono, isRawF32, rawF32ToMono, toMono } from '../src/preload/decode.js'
@@ -159,7 +159,9 @@ describe('createApi', () => {
       CH.preloadPcm,
       CH.play
     ])
-    expect(ipc.calls[2]?.args.slice(0, 2)).toEqual(['a', '1_2'])
+    // engine はレートも音源キーに含めるので、デコードしたレートを一緒に渡す
+    expect(ipc.calls[2]?.args.slice(0, 3)).toEqual(['a', '1_2', 32000])
+    expect(ipc.calls[3]?.args[0]).toMatchObject({ srcId: 'a', fp: '1_2', sampleRate: 32000 })
   })
 
   it('attach は健全なエンジンを起こし直さない（Ctrl+R のたびに殺さない）', async () => {
@@ -258,6 +260,77 @@ describe('createApi', () => {
     expect(seen).toEqual([16000])
     // getStatus を聞きに行っていないこと（イベントで足りている）
     expect(ipc.calls.some((c) => c.ch === CH.getStatus)).toBe(false)
+  })
+
+  it('VC 入室直後でレート未計測でも、play を数秒待たせない（後からまとめて鳴らさない）', async () => {
+    vi.useFakeTimers()
+    try {
+      const seen: number[] = []
+      const ipc = fakeIpc({
+        [CH.readSoundFile]: new ArrayBuffer(8),
+        [CH.play]: 'v1',
+        // attach 済みだが Discord の音声処理がまだ測れていない
+        [CH.getStatus]: { ...STATUS, enginePid: 5000, sampleRate: null, frameSamples: null }
+      })
+      const api = createApi(ipc, stereoAt(seen))
+      const settled: string[] = []
+      for (const id of ['a', 'b', 'c']) {
+        void api.play({ srcId: id, path: `${id}.wav`, fp: '1_2', vol: 1 }).then(
+          () => settled.push(id),
+          () => settled.push(id)
+        )
+      }
+      // クリックへの反応として許せる程度の時間だけ進める
+      await vi.advanceTimersByTimeAsync(500)
+      expect(settled).toEqual(['a', 'b', 'c'])
+      // クリック順に engine へ届き、Canary の既定レートでデコードしている
+      expect(ipc.calls.filter((c) => c.ch === CH.play).map((c) => c.args[0])).toMatchObject([
+        { srcId: 'a', sampleRate: 32000 },
+        { srcId: 'b', sampleRate: 32000 },
+        { srcId: 'c', sampleRate: 32000 }
+      ])
+      expect(seen).toEqual([32000, 32000, 32000])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('既定レートで鳴らした後にレートが測れたら、そのレートでデコードして送り直す', async () => {
+    const seen: number[] = []
+    const ipc = fakeIpc({
+      [CH.readSoundFile]: new ArrayBuffer(8),
+      [CH.play]: 'v1',
+      // 既定（Canary = 32000）と違うレートが後から測れる状況を作るため、状態は未計測にしておく
+      [CH.getStatus]: { ...STATUS, sampleRate: null, frameSamples: null }
+    })
+    const api = createApi(ipc, stereoAt(seen))
+    const req = { srcId: 'a', path: 'a.wav', fp: '1_2', vol: 1 }
+    await api.play(req)
+    ipc.push({ ev: 'status', status: { ...STATUS, enginePid: 5000, sampleRate: 48000, frameSamples: 480 } })
+    await api.play(req)
+
+    expect(seen).toEqual([32000, 48000])
+    const preloads = ipc.calls.filter((c) => c.ch === CH.preloadPcm).map((c) => c.args.slice(0, 3))
+    expect(preloads).toEqual([
+      ['a', '1_2', 32000],
+      ['a', '1_2', 48000]
+    ])
+    const plays = ipc.calls.filter((c) => c.ch === CH.play).map((c) => c.args[0])
+    expect(plays).toMatchObject([{ sampleRate: 32000 }, { sampleRate: 48000 }])
+  })
+
+  it('エンジン再起動後は直前のマスター音量を再適用する', async () => {
+    const ipc = fakeIpc()
+    const api = createApi(ipc, stereo)
+    await api.setMaster(2.03)
+    ipc.calls.length = 0
+
+    ipc.push({ ev: 'status', status: { ...STATUS, engine: 'failed', enginePid: null } })
+    ipc.push({ ev: 'status', status: { ...STATUS, enginePid: 5000 } })
+    ipc.push({ ev: 'status', status: { ...STATUS, enginePid: 5000, sampleRate: 32000 } })
+    await Promise.resolve()
+
+    expect(ipc.calls).toEqual([{ ch: CH.setMaster, args: [2.03] }])
   })
 
   it('onEngineEvent はエンジン由来のイベントだけを渡す', () => {
