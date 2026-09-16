@@ -27,16 +27,11 @@ import {
 import { clampRefDbfs } from '@shared/loudness'
 import type { SoundItem, SourceStats } from '@shared/types'
 import { guardTrusted } from '@/lib/trusted'
+import { clearSourceStatsCache, scanSources } from '@/lib/sourceScan'
 
 // 「あー」と出し続けてもらう前提の長さ。長くすると息が続かず途中で切れ、
 // 発話フレームが減って測定が不安定になる。
 const MEASURE_SECONDS = 3
-const SCAN_CONCURRENCY = 3 // ffmpeg 変換が走るので欲張らない
-
-// スキャン結果はダイアログを閉じても保持する(Radix は閉じると中身をアンマウントするため、
-// これが無いと開き直すたびに全件測り直しになる)。キーは内容指紋なので、ファイルを
-// 差し替えれば自動的に測り直しになる。
-const statsCache = new Map<string, SourceStats>()
 
 // 読み取り専用のレベルメーター。-60..0 dBFS を 0..100% に線形マップする。
 // components/ui/ は shadcn 生成物の置き場なので、手書きのこれはここに置く。
@@ -108,6 +103,10 @@ function useNormalizeScan(sounds: SoundItem[]): {
   // 再実行側が下ろせず、スキャンが即座に空振りして「測定できませんでした」になる。
   // 世代なら、新しい run が始まった時点で古い run だけが無効になる。
   const genRef = useRef(0)
+  // 世代とは別に、追い越された / アンマウントされた run を次の音源へ進ませない。
+  // 世代だけだと結果を捨てるだけで、残りの音源の ffmpeg 変換が裏で次々に始まる。
+  // (取り消した時点で走っている変換そのものは止められない)
+  const abortRef = useRef<AbortController | null>(null)
 
   const run = async (): Promise<void> => {
     const gen = ++genRef.current
@@ -123,36 +122,32 @@ function useNormalizeScan(sounds: SoundItem[]): {
     setDone(0)
     setFailed(0)
     setError('')
-    const queue = [...sounds]
-    const got: Record<string, SourceStats> = {}
-    let bad = 0
-    let firstErr = ''
-    const worker = async (): Promise<void> => {
-      for (;;) {
+    abortRef.current?.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    const r = await scanSources(
+      sounds,
+      api,
+      (p) => {
         if (!alive()) return
-        const item = queue.shift()
-        if (!item) return
-        try {
-          const cached = statsCache.get(item.fp)
-          const st = cached ?? (await api.sourceStats(item.path))
-          if (!alive()) return
-          statsCache.set(item.fp, st)
-          got[item.id] = st
-          setStats((prev) => ({ ...prev, [item.id]: st }))
-        } catch (e) {
-          // 理由を捨てない。握り潰すと「使えない」としか分からなくなる。
-          bad++
-          // 生の英語(ffmpeg のログや frida のメッセージ)をそのまま画面へ出さない。
-          // store と同じ写像を通し、対応できる文言は日本語にする。
-          if (!firstErr) firstErr = `${item.id}: ${humanizeEngineMessage(String(e))}`
+        if (p.stats) {
+          const st = p.stats
+          setStats((prev) => ({ ...prev, [p.sound.id]: st }))
         }
-        setDone((n) => n + 1)
-      }
-    }
-    await Promise.all(Array.from({ length: SCAN_CONCURRENCY }, worker))
+        setDone(p.done)
+      },
+      ctrl.signal
+    )
     if (!alive()) return // 新しいスキャンに追い越された / アンマウントされた
-    setFailed(bad)
-    setError(firstErr)
+    const got: Record<string, SourceStats> = {}
+    for (const s of sounds) {
+      const st = r.stats.get(s.fp)
+      if (st) got[s.id] = st
+    }
+    setFailed(r.failed)
+    // 生の英語(ffmpeg のログや frida のメッセージ)をそのまま画面へ出さない。
+    // store と同じ写像を通し、対応できる文言は日本語にする。
+    setError(r.firstError ? `${r.firstError.id}: ${humanizeEngineMessage(r.firstError.message)}` : '')
     setScanning(false)
     const ref = medianDbfs(Object.values(got).map((s) => s.rms))
     if (ref === null) return
@@ -234,6 +229,7 @@ function useNormalizeScan(sounds: SoundItem[]): {
   useEffect(() => {
     return () => {
       genRef.current++
+      abortRef.current?.abort()
     }
   }, [])
 
@@ -254,7 +250,7 @@ function useNormalizeScan(sounds: SoundItem[]): {
       void run()
     },
     rescan: () => {
-      statsCache.clear()
+      clearSourceStatsCache()
       setStats({})
       void run()
     }

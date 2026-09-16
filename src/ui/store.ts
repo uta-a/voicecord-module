@@ -10,7 +10,8 @@ import type {
 } from '@shared/types'
 import { LocalAudio, listOutputDevices } from '@/lib/localAudio'
 import { fmtDb, toLinear } from '@/lib/db'
-import { validateVoice } from '@/lib/calibration'
+import { recommendSourceVolume, validateVoice } from '@/lib/calibration'
+import { scanSources } from '@/lib/sourceScan'
 import { mockApi } from '@/mockApi'
 import { gatedRms } from '@shared/loudness'
 
@@ -187,6 +188,9 @@ interface State {
   // 音量調整ダイアログの開閉。TopBar と右レールの両方に導線があるため、
   // どちらから開いても同じ実体になるよう状態はここに置く。
   levelOpen: boolean
+  // メインパネルの「揃える」の進み具合。null は実行していない。ポップアウトを閉じても
+  // 最後まで進めるので、進捗はコンポーネントではなくここに置く。
+  normalizeJob: { done: number; total: number } | null
   // lifecycle
   init: () => Promise<void>
   connect: (build: BuildKey) => Promise<void>
@@ -207,6 +211,8 @@ interface State {
   // 音源だけが未調整のまま残り、相手には基準とのズレぶん大きく(小さく)届くため、
   // 画面側でそれと分かるようにするための判定。値そのものは勝手に書き換えない。
   isVolumeAdjusted: (srcId: string) => boolean
+  // 全音源を測り、保存済みの基準(normalizeRefDbfs)へ揃える音量で上書きする(手で決めた音量も含む)。
+  normalizeAll: () => Promise<void>
   play: (srcId: string, override?: PlayOverride) => Promise<void>
   stopVoice: (voiceId: string) => void
   setVoiceVolume: (voiceId: string, v: number) => void
@@ -431,6 +437,7 @@ export const useStore = create<State>((rawSet, get) => {
   notice: { msg: '', seq: 0 },
   calib: CALIB_IDLE,
   levelOpen: false,
+  normalizeJob: null,
 
   init: async () => {
     if (initStarted) return
@@ -822,6 +829,70 @@ export const useStore = create<State>((rawSet, get) => {
   // 音源別音量。未測定の音源(音量調整を開く前に追加されたファイル等)は等倍で鳴らす。
   volFor: (srcId) => get().sourceVolumes[srcId] ?? 1.0,
   isVolumeAdjusted: (srcId) => get().sourceVolumes[srcId] !== undefined,
+
+  // 音量調整ダイアログの「1. 音源の音量を揃える」と違い、基準と送信音量は動かさない。
+  // 基準を測り直すと校正済みの送信音量(calibration.ts)との整合が崩れるため、全音源を
+  // 保存済みの基準へ揃え直す。手で決めた音量も上書きする(確認なしで全部揃える、がこのボタンの約束)。
+  normalizeAll: async () => {
+    // ボタンは実行中に押せないので、ここに来るのは連打の取りこぼしだけ。進捗が画面に出ているため理由は出さない。
+    if (get().normalizeJob) return
+    if (!api) {
+      set({ status: 'エンジンに接続されていないため、音量を揃えられません' })
+      return
+    }
+    const targets = get().sounds
+    if (targets.length === 0) {
+      set({ status: '音源がありません' })
+      return
+    }
+    // 測っている間に手で変えた音量を見分けるため、開始時点の値を控える。
+    const startVolumes = get().sourceVolumes
+    set({ normalizeJob: { done: 0, total: targets.length } })
+    try {
+      const r = await scanSources(targets, api, (p) =>
+        set({ normalizeJob: { done: p.done, total: p.total } })
+      )
+      const ref = get().settings.normalizeRefDbfs
+      let applied = 0
+      let reloaded = 0
+      let manual = 0
+      for (const snd of targets) {
+        const st = r.stats.get(snd.fp)
+        if (!st) continue
+        // 一覧の再読込で消えた/差し替わった音源には書かない(config に幽霊の音量が残る)。
+        if (!get().sounds.some((s) => s.id === snd.id && s.fp === snd.fp)) {
+          reloaded++
+          continue
+        }
+        // 測っている間に手で音量を変えた音源は上書きしない(開始前の値は上書きするが、
+        // 押した後の操作まで消すと「動かしたのに戻った」になる)。
+        if (get().sourceVolumes[snd.id] !== startVolumes[snd.id]) {
+          manual++
+          continue
+        }
+        get().setSourceVolumeLive(snd.id, recommendSourceVolume(st.rms, st.peak, ref).vol)
+        applied++
+      }
+      // setSourceVolume は 1 件ごとに config.json へ書くので、まとめて 1 回だけ保存する。
+      if (applied > 0) void api.saveConfig({ sourceVolumes: get().sourceVolumes })
+      // 飛ばした理由は分けて伝える。
+      const notes: string[] = []
+      if (applied > 0) notes.push(`${applied} 件の音量を揃えました`)
+      if (manual > 0) notes.push(`測っている間に音量が変更された ${manual} 件はそのままにしました`)
+      if (r.failed > 0 && r.firstError) {
+        // 生の英語(ffmpeg のログ等)をそのまま出さない。ダイアログと同じ写像を通す。
+        notes.push(
+          `${r.failed} 件を測定できませんでした: ${r.firstError.id}: ${humanizeEngineMessage(r.firstError.message)}`
+        )
+      }
+      if (reloaded > 0) notes.push(`一覧が更新されたため ${reloaded} 件は揃えませんでした。もう一度押してください`)
+      set({ status: notes.join('。') })
+    } catch (e) {
+      set({ status: '音量を揃えられませんでした: ' + humanizeEngineMessage(String(e)) })
+    } finally {
+      set({ normalizeJob: null })
+    }
+  },
 
   play: async (srcId, override) => {
     const st0 = get()
