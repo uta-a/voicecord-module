@@ -46,7 +46,7 @@ export function MasterFader({ className }: { className?: string }): React.JSX.El
     >
       <div className="flex items-baseline justify-between gap-2 text-[11px] leading-none">
         <span className="truncate text-muted-foreground">
-          {rel ? '効果音と声の差' : '送信ゲイン（未校正）'}
+          {rel ? '全体音量' : '全体音量（未校正）'}
         </span>
         <span
           className={cn(
@@ -71,7 +71,7 @@ export function MasterFader({ className }: { className?: string }): React.JSX.El
         </Button>
         <div className="relative min-w-0 flex-1">
           <Slider
-            aria-label={rel ? '効果音と声の音量差' : '送信ゲイン'}
+            aria-label={rel ? '全体音量（声との差）' : '全体音量'}
             value={[shownValue]}
             min={faderMin}
             max={faderMax}

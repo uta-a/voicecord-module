@@ -1,13 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
-  DoorOpen,
+  AudioLines,
+  ChevronDown,
   Folder,
   FolderOpen,
   Headphones,
   Library,
-  Mic,
   Play,
   RefreshCw,
   Search,
@@ -19,13 +19,15 @@ import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/compon
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
+import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { SettingsTabs } from '@/components/SettingsTabs'
+import { MonitorSection, VolumeSection } from '@/components/SettingsSections'
+import { SettingsRow } from '@/components/SettingsRow'
 import { EntrySoundDialog } from '@/components/EntrySoundDialog'
 import { MasterFader } from '@/components/MasterFader'
 import { guardTrusted } from '@/lib/trusted'
 import { cn } from '@/lib/utils'
-import { useStore } from '@/store'
+import { engineApi, useStore } from '@/store'
 import { usePopout } from '@/popout'
 import { DOT_LABEL, statusProblems } from '@shared/status'
 import { ROOT_ID } from '../../preload/shell.js'
@@ -52,24 +54,6 @@ const CONNECTION: Record<
   switching: { label: '切替中', variant: 'secondary' },
   disconnected: { label: '未接続', variant: 'destructive' }
 }
-
-// 送信ゲートが開いている間は、効果音だけでなく実マイク音声も Discord 側のミュート/VAD を
-// 無視して相手へ流れる。最も危険な状態なので、トーストではなく常時可視の場所に出す。
-const MIC_TRANSMIT: Record<'open' | 'unknown', { label: string; className: string; title: string }> =
-  {
-    open: {
-      label: 'マイク送信中',
-      className: 'border-destructive/60 bg-destructive/15 text-destructive',
-      title:
-        'Discord のミュートや音声検出の設定を無視して、マイクの音がそのまま相手へ届いています。効果音の再生が終わると自動で戻ります。'
-    },
-    unknown: {
-      label: 'マイク状態不明',
-      className: 'border-warning/60 bg-warning/15 text-warning',
-      title:
-        'エンジンとの接続が切れたため、マイクが常時送信のままかどうかを確認できません。再接続すると自動で元に戻ります。'
-    }
-  }
 
 function folderName(folder: string): string {
   return folder.split(/[\\/]/).filter((s) => s !== '').pop() ?? 'サウンドフォルダ'
@@ -191,7 +175,11 @@ function SoundTile({ sound }: { sound: SoundItem }): React.JSX.Element {
           aria-label={`${sound.id}をプレイする`}
           disabled={!isConnected}
           // VC へ音を流す操作なので、ページ側のスクリプトの合成クリックでは鳴らさない
-          onClick={guardTrusted('タイルの再生', () => void play(sound.id))}
+          onClick={guardTrusted('タイルの再生', (e: React.MouseEvent<HTMLButtonElement>) => {
+            // クリック後に残る :focus-within で、マウスを離しても操作オーバーレイが残らないようにする。
+            e.currentTarget.blur()
+            void play(sound.id)
+          })}
           title={isConnected ? sound.name : 'VC未接続のため再生できません（右クリックで試聴・音量調節）'}
           className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed"
         />
@@ -246,18 +234,41 @@ function SoundTile({ sound }: { sound: SoundItem }): React.JSX.Element {
   )
 }
 
-function MicBadge(): React.JSX.Element | null {
-  const micTransmit = useStore((s) => s.micTransmit)
-  if (micTransmit === 'closed') return null
-  const mic = MIC_TRANSMIT[micTransmit]
+// 全音源を保存済みの基準へ揃える(手で決めた音量も上書きする)。VC へ音を流さない操作なので guardTrusted は付けない。
+// 「全停止」の隣に置くので、押し間違えても害の無い見た目(赤くない)にする。
+function NormalizeButton(): React.JSX.Element {
+  const count = useStore((s) => s.sounds.length)
+  const job = useStore((s) => s.normalizeJob)
+  const normalizeAll = useStore((s) => s.normalizeAll)
+  const label = job
+    ? `音量を揃えています（${job.done}/${job.total}）`
+    : !engineApi
+      ? 'エンジンに接続されていないため、音量を揃えられません'
+      : count === 0
+        ? '音源がありません'
+        : 'すべての音源の音量を揃える'
   return (
-    <span
-      className={cn('flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] font-medium', mic.className)}
-      title={mic.title}
-      aria-live="polite"
-    >
-      <Mic className="h-3 w-3" aria-hidden="true" />
-      {mic.label}
+    // disabled な button には Chromium がマウスイベントを配送せず title が出ないので、
+    // 押せない理由は外側にも title で持たせる。
+    <span title={label} className="shrink-0">
+      <Button
+        variant="secondary"
+        size="sm"
+        aria-label={label}
+        title={label}
+        disabled={job !== null || !engineApi || count === 0}
+        onClick={() => void normalizeAll()}
+        className="h-8"
+      >
+        <AudioLines className="h-3.5 w-3.5" aria-hidden="true" />
+        {job ? (
+          <span className="font-mono tabular-nums">
+            {job.done}/{job.total}
+          </span>
+        ) : (
+          '揃える'
+        )}
+      </Button>
     </span>
   )
 }
@@ -386,8 +397,9 @@ function MainView(): React.JSX.Element {
       <div className="shrink-0 border-t bg-background">
         <div className="flex items-center gap-3 px-3 py-2">
           <MasterFader className="flex-1" />
-          <MicBadge />
-          <Button variant="destructive" size="sm" onClick={stopAll} className="h-8 shrink-0">
+          <NormalizeButton />
+          {/* 「揃える」と押し間違えないよう、gap-3 より少し離す */}
+          <Button variant="destructive" size="sm" onClick={stopAll} className="ml-1 h-8 shrink-0">
             <Square className="h-3.5 w-3.5" aria-hidden="true" />
             全停止
           </Button>
@@ -404,6 +416,16 @@ function StatusSection(): React.JSX.Element {
   const detail = useStore((s) => s.connectionDetail)
   const state = CONNECTION[connection]
   const problems = status ? statusProblems(status) : []
+  const tierWarning = info !== null && info.tier !== null && info.tier > 2
+  // 普段は見ない診断の値なので畳んでおくが、不具合があるときは開いておく(畳んだ中に隠さない)。
+  // 開いた後に不具合が出た・変わった場合も同じ理由で開く。有無ではなく内容で見るのは、
+  // 畳んだ後に別の不具合が増えても気付けるようにするため。内容が同じなら畳んだままにする。
+  const hasIssue = problems.length > 0 || Boolean(info?.fabReason) || tierWarning
+  const issueKey = hasIssue ? JSON.stringify([problems, info?.fabReason ?? null, tierWarning]) : ''
+  const [expanded, setExpanded] = useState(hasIssue)
+  useEffect(() => {
+    if (issueKey !== '') setExpanded(true)
+  }, [issueKey])
 
   const rows: Array<[string, string]> = []
   if (status) {
@@ -430,34 +452,54 @@ function StatusSection(): React.JSX.Element {
   }
 
   return (
-    <section aria-label="状態" className="space-y-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <Badge variant={state.variant} className="h-5 shrink-0 px-2 py-0">
-          {state.label}
-        </Badge>
-        <span className="truncate font-mono text-[11px] text-muted-foreground" title={detail}>
-          {detail}
-        </span>
-      </div>
-      {info?.fabReason && <p className="text-xs text-warning">{info.fabReason}</p>}
-      {info && info.tier !== null && info.tier > 1 && (
-        <p className="text-xs text-warning">
-          サウンドボードのボタンを予備の方法で見つけています。Discord の次の更新でボタンが出なくなる可能性があります。
-        </p>
-      )}
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs">
-        {rows.map(([k, v]) => (
-          <div key={k} className="contents">
-            <dt className="text-muted-foreground">{k}</dt>
-            <dd className="min-w-0 break-all">{v}</dd>
-          </div>
-        ))}
-      </dl>
-      {problems.length > 0 && (
-        <div className="whitespace-pre-wrap rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
-          {problems.join('\n')}
+    <section aria-label="接続状態">
+      <h3 className="text-xs font-semibold text-muted-foreground">接続状態</h3>
+      <div className="flex items-center justify-between gap-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Badge variant={state.variant} className="h-5 shrink-0 px-2 py-0">
+            {state.label}
+          </Badge>
+          <span className="truncate font-mono text-[11px] text-muted-foreground" title={detail}>
+            {detail}
+          </span>
         </div>
-      )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0"
+          aria-expanded={expanded}
+          aria-controls="vc-status-detail"
+          onClick={() => setExpanded((v) => !v)}
+        >
+          詳細
+          <ChevronDown
+            className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
+            aria-hidden="true"
+          />
+        </Button>
+      </div>
+      {/* aria-controls の指す先が畳んだときも存在するよう、描画したまま hidden で隠す */}
+      <div id="vc-status-detail" hidden={!expanded} className="space-y-2">
+        {info?.fabReason && <p className="text-xs text-warning">{info.fabReason}</p>}
+        {tierWarning && (
+          <p className="text-xs text-warning">
+            サウンドボードのボタンを予備の方法で見つけています。Discord の次の更新でボタンが出なくなる可能性があります。
+          </p>
+        )}
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs">
+          {rows.map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt className="text-muted-foreground">{k}</dt>
+              <dd className="min-w-0 break-all">{v}</dd>
+            </div>
+          ))}
+        </dl>
+        {problems.length > 0 && (
+          <div className="whitespace-pre-wrap rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
+            {problems.join('\n')}
+          </div>
+        )}
+      </div>
     </section>
   )
 }
@@ -467,11 +509,19 @@ function SettingsView(): React.JSX.Element {
   const folder = useStore((s) => s.folder)
   const chooseFolder = useStore((s) => s.chooseFolder)
   const reload = useStore((s) => s.reload)
+  const sounds = useStore((s) => s.sounds)
   const entryEnabled = useStore((s) => s.settings.entrySoundEnabled)
   const entrySrcId = useStore((s) => s.settings.entrySoundSrcId)
+  const patch = useStore((s) => s.patchSettings)
   const [entryOpen, setEntryOpen] = useState(false)
-  // 有効でも音源が未選択なら鳴らない。OFF と同じ表示にすると混乱するので独立した状態にする
-  const entryLabel = !entryEnabled ? 'OFF' : entrySrcId === '' ? '未設定' : entrySrcId
+  // 有効でも音源が未選択・見つからなければ鳴らないので、スイッチとは別に説明で伝える
+  // (判定は EntrySoundDialog の補足行と揃える)
+  const entryDescription =
+    entrySrcId === ''
+      ? 'サウンドが未選択のため鳴りません'
+      : !sounds.some((s) => s.id === entrySrcId)
+        ? `「${entrySrcId}」が見つかりません（ファイルが移動・削除された可能性）`
+        : entrySrcId
 
   return (
     <>
@@ -481,34 +531,76 @@ function SettingsView(): React.JSX.Element {
         </IconButton>
         <h2 className="text-base font-semibold">VoiceCord の設定</h2>
       </header>
+      {/* Discord 純正の設定と同じく、よく触るものから順に 1 ページの行で並べる。
+          診断は普段見ないので最後に畳んで置く。 */}
       <div className="flex h-[456px] min-h-0 shrink flex-col">
         <ScrollArea className="min-h-0 flex-1">
-          <div className="space-y-5 p-4">
-            <StatusSection />
-            <section className="space-y-2" aria-label="入場サウンド">
+          <div className="space-y-6 p-4">
+            <VolumeSection />
+            <MonitorSection />
+            <section aria-label="入場サウンド">
               <h3 className="text-xs font-semibold text-muted-foreground">入場サウンド</h3>
-              <Button variant="secondary" size="sm" className="w-full justify-start" onClick={() => setEntryOpen(true)}>
-                <DoorOpen className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="min-w-0 truncate">入場サウンド: {entryLabel}</span>
-              </Button>
-            </section>
-            <section className="space-y-2" aria-label="サウンドフォルダ">
-              <h3 className="text-xs font-semibold text-muted-foreground">サウンドフォルダ</h3>
-              <p className="break-all font-mono text-[11px] text-muted-foreground">{folder || 'フォルダ未選択'}</p>
-              <div className="flex gap-2">
-                <Button variant="secondary" size="sm" onClick={() => void chooseFolder()}>
-                  <FolderOpen className="h-3.5 w-3.5" />
-                  フォルダを選ぶ
-                </Button>
-                <Button variant="secondary" size="sm" onClick={() => void reload()}>
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  再読込
-                </Button>
+              <div>
+                <SettingsRow
+                  label="VC に入ったら自動で鳴らす"
+                  description={<span className="break-all">{entryDescription}</span>}
+                  control={
+                    <>
+                      <Switch
+                        aria-label="VC に入ったら自動で鳴らす"
+                        checked={entryEnabled}
+                        onCheckedChange={(checked) => patch({ entrySoundEnabled: checked })}
+                      />
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        aria-label="入場サウンドの設定を開く"
+                        onClick={() => setEntryOpen(true)}
+                      >
+                        設定
+                      </Button>
+                    </>
+                  }
+                />
               </div>
             </section>
+            <section aria-label="サウンドフォルダ">
+              <h3 className="text-xs font-semibold text-muted-foreground">サウンドフォルダ</h3>
+              <div>
+                <SettingsRow
+                  // 空白の無い長いフォルダ名でも右のボタンに重ならないよう、どこでも折り返す
+                  label={
+                    <span className="break-all font-semibold">{folder ? folderName(folder) : 'フォルダ未選択'}</span>
+                  }
+                  description={folder && <span className="break-all font-mono text-[11px]">{folder}</span>}
+                  control={
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        aria-label="サウンドフォルダを選ぶ"
+                        onClick={() => void chooseFolder()}
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        選ぶ
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        aria-label="サウンドフォルダを再読込"
+                        onClick={() => void reload()}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        再読込
+                      </Button>
+                    </>
+                  }
+                />
+              </div>
+            </section>
+            <StatusSection />
           </div>
         </ScrollArea>
-        <SettingsTabs />
       </div>
       <EntrySoundDialog open={entryOpen} onOpenChange={setEntryOpen} />
     </>
