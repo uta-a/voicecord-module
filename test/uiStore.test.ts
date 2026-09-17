@@ -415,3 +415,139 @@ describe('UI store connect', () => {
     expect(useStore.getState().connectionDetail).toBe('canary 1.0.1177')
   })
 })
+
+describe('UI store Krisp の案内', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.doUnmock('../src/ui/mockApi.js')
+    vi.resetModules()
+  })
+
+  it('Discord 上で VC に居るのに接続済みでないときだけ案内する', async () => {
+    const { shouldShowKrispHint } = await import('../src/ui/store.js')
+    expect(shouldShowKrispHint({ discordInVc: true, connection: 'waiting' })).toBe(true)
+    expect(shouldShowKrispHint({ discordInVc: true, connection: 'disconnected' })).toBe(false)
+    expect(shouldShowKrispHint({ discordInVc: true, connection: 'connected' })).toBe(false)
+    expect(shouldShowKrispHint({ discordInVc: false, connection: 'waiting' })).toBe(false)
+  })
+
+  async function setup(): Promise<{
+    store: typeof import('../src/ui/store.js')
+    emit: (p: EngineEvent) => void
+  }> {
+    const listeners = new Set<(event: EngineEvent) => void>()
+    const api: Api = {
+      ...createMockApi(),
+      attach: async () => ({ ok: true, pid: 1, label: 'canary 1.0.1177', vcActive: false }),
+      onEngineEvent: (listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      }
+    }
+    vi.doMock('../src/ui/mockApi.js', () => ({ mockApi: api }))
+    const store = await import('../src/ui/store.js')
+    await store.useStore.getState().init()
+    // init の後から偽のタイマーにする(init の中の待ちを止めない)
+    vi.useFakeTimers()
+    const emit = (p: EngineEvent): void => {
+      for (const l of listeners) l(p)
+    }
+    return { store, emit }
+  }
+
+  it('VC に入って 5 秒たっても Krisp の処理を検出できなければ案内を出し、VC を抜けたら消す', async () => {
+    const { store } = await setup()
+    const { useStore, KRISP_HINT_AFTER_MS } = store
+    expect(KRISP_HINT_AFTER_MS).toBe(5000)
+    expect(useStore.getState().connection).toBe('waiting')
+    expect(useStore.getState().krispHint).toBe(false)
+
+    useStore.getState().setDiscordInVc(true)
+    vi.advanceTimersByTime(KRISP_HINT_AFTER_MS - 1)
+    expect(useStore.getState().krispHint).toBe(false)
+    vi.advanceTimersByTime(1)
+    expect(useStore.getState().krispHint).toBe(true)
+
+    useStore.getState().setDiscordInVc(false)
+    expect(useStore.getState().krispHint).toBe(false)
+  })
+
+  it('入室の判定時にまだ接続中でも、connect が待機中で終わった時点で経過時間を見て案内する', async () => {
+    const { store } = await setup()
+    const { useStore } = store
+    // Ctrl+R 後は、入室の通知が init / connect の完了より先に来る
+    useStore.setState({ connection: 'switching' })
+    useStore.getState().setDiscordInVc(true)
+    vi.advanceTimersByTime(6000)
+    expect(useStore.getState().krispHint).toBe(false)
+
+    await useStore.getState().connect('canary')
+    expect(useStore.getState().connection).toBe('waiting')
+    expect(useStore.getState().krispHint).toBe(true)
+  })
+
+  it('同じ値を続けて渡しても待ち時間を数え直さない', async () => {
+    const { store } = await setup()
+    const { useStore } = store
+    useStore.getState().setDiscordInVc(true)
+    vi.advanceTimersByTime(3000)
+    useStore.getState().setDiscordInVc(true)
+    vi.advanceTimersByTime(2000)
+    expect(useStore.getState().krispHint).toBe(true)
+  })
+
+  it('待っている間に VC を抜けたら案内しない', async () => {
+    const { store } = await setup()
+    const { useStore } = store
+    useStore.getState().setDiscordInVc(true)
+    vi.advanceTimersByTime(3000)
+    useStore.getState().setDiscordInVc(false)
+    vi.advanceTimersByTime(10_000)
+    expect(useStore.getState().krispHint).toBe(false)
+  })
+
+  it('vc:true が届けば案内を消し、その後 vc:false になっても(ミュートの可能性があるので)案内し直さない', async () => {
+    const { store, emit } = await setup()
+    const { useStore } = store
+    useStore.getState().setDiscordInVc(true)
+    vi.advanceTimersByTime(5000)
+    expect(useStore.getState().krispHint).toBe(true)
+
+    emit({ ev: 'vc', active: true })
+    expect(useStore.getState().connection).toBe('connected')
+    expect(useStore.getState().krispHint).toBe(false)
+
+    emit({ ev: 'vc', active: false })
+    expect(useStore.getState().connection).toBe('waiting')
+    vi.advanceTimersByTime(10_000)
+    expect(useStore.getState().krispHint).toBe(false)
+  })
+
+  it('待っている間に vc:true が届いたら、待ち時間が切れても案内しない', async () => {
+    const { store, emit } = await setup()
+    const { useStore } = store
+    useStore.getState().setDiscordInVc(true)
+    vi.advanceTimersByTime(1000)
+    emit({ ev: 'vc', active: true })
+    emit({ ev: 'vc', active: false })
+    vi.advanceTimersByTime(10_000)
+    expect(useStore.getState().krispHint).toBe(false)
+  })
+
+  it('再生を断る理由は、案内中なら Krisp の案内、そうでなければ従来の文言', async () => {
+    const { store } = await setup()
+    const { useStore, KRISP_HINT } = store
+    const id = useStore.getState().sounds[0]!.id
+
+    useStore.setState({ attached: true, connection: 'waiting', krispHint: false, status: '' })
+    await useStore.getState().play(id)
+    expect(useStore.getState().status).toBe('VC に接続してから再生してください')
+
+    useStore.setState({ krispHint: true, status: '' })
+    await useStore.getState().play(id)
+    expect(useStore.getState().status).toBe(KRISP_HINT)
+    expect(KRISP_HINT).toBe(
+      'VC にいるのに Discord の音声処理（Krisp）を検出できません。設定 → 音声・ビデオ → ノイズ抑制を「Krisp」にし、マイクのミュートを解除してください'
+    )
+  })
+})

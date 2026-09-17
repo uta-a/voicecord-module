@@ -193,6 +193,9 @@ interface State {
   // メインパネルの「揃える」の進み具合。null は実行していない。ポップアウトを閉じても
   // 最後まで進めるので、進捗はコンポーネントではなくここに置く。
   normalizeJob: { done: number; total: number } | null
+  // Discord 上では VC に居るのに、Krisp の処理(vc の通知)を検出できないまま時間がたった。
+  // ノイズ抑制が Krisp 以外だと hook が噛まず、再生も VC 在席の判定もできないので案内する。
+  krispHint: boolean
   // lifecycle
   init: () => Promise<void>
   connect: (build: BuildKey) => Promise<void>
@@ -225,6 +228,8 @@ interface State {
   stopPreview: () => void
   testEntrySound: () => void
   setStatus: (msg: string) => void
+  // Discord の画面上で VC に居るか(preload が音声パネルのボタンを接ぎ木できたか)。
+  setDiscordInVc: (inVc: boolean) => void
   // calibration
   setLevelOpen: (v: boolean) => void
   startVoiceCalib: (seconds: number) => void
@@ -286,6 +291,31 @@ let gateOpenWaiters: (() => void)[] = []
 // 自分をミュートして 2.5 秒以上おいてから解除しただけで「入場した」と誤認し、
 // 効果音が相手へ流れてしまう(ミュートでは Connection* は変わらない)。
 let lastGateConn: string | null = null
+
+// ---- Krisp の案内 ----
+// VC 在席の判定も音の注入先も discord_krisp.node の処理に頼っている。ノイズ抑制を Krisp 以外に
+// すると呼ばれず、engine は attach 済みのまま「VC待機中」から動かない。Discord の画面(preload)は
+// VC に居ると知っているので、入ってからしばらく vc が来なければ設定を案内する。
+// vc:false では出さない。自分をミュートしてもハートビートは止まるので、入室後の判定だけで出す。
+export const KRISP_HINT_AFTER_MS = 5000
+export const KRISP_HINT =
+  'VC にいるのに Discord の音声処理（Krisp）を検出できません。設定 → 音声・ビデオ → ノイズ抑制を「Krisp」にし、マイクのミュートを解除してください'
+let discordInVc = false
+/** Discord の画面上で VC に入った時刻。connect が遅れて判定を逃しても、経過時間で出し直す */
+let discordInVcSince = 0
+let krispHintTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearKrispHintTimer(): void {
+  if (krispHintTimer) {
+    clearTimeout(krispHintTimer)
+    krispHintTimer = null
+  }
+}
+
+export function shouldShowKrispHint(s: { discordInVc: boolean; connection: ConnState }): boolean {
+  // 注入先に噛めて待機中のときだけ。アタッチに失敗している（disconnected）なら原因は別なので出さない
+  return s.discordInVc && s.connection === 'waiting'
+}
 
 function resetEntryState(): void {
   if (entryLeaveTimer) {
@@ -406,11 +436,33 @@ export const useStore = create<State>((rawSet, get) => {
     else rawSet(withNotice(partial))
   }
 
+  // 入室から KRISP_HINT_AFTER_MS 経って待機中なら案内する。入室直後だけでなく、connect が
+  // 待機中で終わったときにも呼ぶ（Ctrl+R 後は init が長く、入室時の 1 回の判定では間に合わない）
+  const scheduleKrispHint = (): void => {
+    clearKrispHintTimer()
+    if (!discordInVc) return
+    const check = (): void => {
+      if (shouldShowKrispHint({ discordInVc, connection: get().connection })) set({ krispHint: true })
+    }
+    const rest = KRISP_HINT_AFTER_MS - (Date.now() - discordInVcSince)
+    if (rest <= 0) {
+      check()
+      return
+    }
+    krispHintTimer = setTimeout(() => {
+      krispHintTimer = null
+      check()
+    }, rest)
+  }
+
   // VC 通話中(connected)でなければ再生しない。attach 済みでも待機中(waiting)は
   // 送信ゲートが噛まず音が届かないため、行だけが積まれるのを防ぐ。
   const requireVc = (): boolean => {
     if (get().connection === 'connected') return true
-    set({ status: 'VC に接続してから再生してください' })
+    // VC に居るのに検出できていないなら、「接続してから」では次に何をすればよいか分からない
+    // 案内が残っていても、切断やアタッチ失敗で waiting でなくなったら原因は別なので出さない
+    const hint = get().krispHint && get().connection === 'waiting'
+    set({ status: hint ? KRISP_HINT : 'VC に接続してから再生してください' })
     return false
   }
 
@@ -492,6 +544,7 @@ export const useStore = create<State>((rawSet, get) => {
   calib: CALIB_IDLE,
   levelOpen: false,
   normalizeJob: null,
+  krispHint: false,
 
   init: async () => {
     if (initStarted) return
@@ -565,6 +618,11 @@ export const useStore = create<State>((rawSet, get) => {
             connection: active ? 'connected' : s.attached ? 'waiting' : 'disconnected',
             micTransmit: active ? s.micTransmit : 'closed'
           }))
+          // Krisp の処理が見えた。vc:false では案内し直さない(ミュートでも止まるため)
+          if (active) {
+            clearKrispHintTimer()
+            set({ krispHint: false })
+          }
           // VC を抜けると Krisp の onLeave が止まり、1フレームも測れなくなる。
           if (!active && get().calib.phase === 'measuring') {
             clearCalibTimer()
@@ -801,9 +859,11 @@ export const useStore = create<State>((rawSet, get) => {
         set({
           attached: true,
           connection: connected ? 'connected' : 'waiting',
+          ...(connected ? { krispHint: false } : {}),
           // 注入先が未検出(searching)だと pid は null。「PID null」と出さない
           connectionDetail: r.pid === null ? r.label : `${r.label}  PID ${r.pid}`
         })
+        if (!connected) scheduleKrispHint()
         await api.setMaster(get().settings.master)
       } else {
         set({
@@ -1124,6 +1184,18 @@ export const useStore = create<State>((rawSet, get) => {
   },
 
   setStatus: (msg) => set({ status: msg }),
+
+  setDiscordInVc: (inVc) => {
+    if (inVc === discordInVc) return
+    discordInVc = inVc
+    clearKrispHintTimer()
+    if (!inVc) {
+      set({ krispHint: false })
+      return
+    }
+    discordInVcSince = Date.now()
+    scheduleKrispHint()
+  },
 
   setLevelOpen: (v) => {
     // 閉じたら計測を止める。画面外で走り続けるとホットパスに負荷が残る。

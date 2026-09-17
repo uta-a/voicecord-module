@@ -27,7 +27,7 @@ import { EntrySoundDialog } from '@/components/EntrySoundDialog'
 import { MasterFader } from '@/components/MasterFader'
 import { guardTrusted } from '@/lib/trusted'
 import { cn } from '@/lib/utils'
-import { engineApi, useStore } from '@/store'
+import { engineApi, KRISP_HINT, useStore } from '@/store'
 import { usePopout } from '@/popout'
 import { DOT_LABEL, statusProblems } from '@shared/status'
 import { ROOT_ID } from '../../preload/shell.js'
@@ -283,10 +283,15 @@ function NormalizeButton(): React.JSX.Element {
 function StatusNotice(): React.JSX.Element | null {
   const status = usePopout((s) => s.status)
   const setView = usePopout((s) => s.setView)
-  if (status === null) return null
-  const problems = statusProblems(status)
-  if (status.engine === 'attached' && problems.length === 0) return null
-  const text = problems[0] ?? DOT_LABEL[status.engine]
+  const krispHint = useStore((s) => s.krispHint && s.connection === 'waiting')
+  const problems = status === null ? [] : statusProblems(status)
+  // 既存の問題があればそちらを先に出す（エンジンが動いていなければ Krisp の設定以前の話）
+  const issue =
+    status !== null && (status.engine !== 'attached' || problems.length > 0)
+      ? (problems[0] ?? DOT_LABEL[status.engine])
+      : null
+  const text = issue ?? (krispHint ? KRISP_HINT : null)
+  if (text === null) return null
   return (
     <button
       type="button"
@@ -294,7 +299,10 @@ function StatusNotice(): React.JSX.Element | null {
       className="flex shrink-0 items-center gap-2 border-b bg-warning/15 px-3 py-2 text-left text-xs text-warning"
     >
       <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate">VoiceCord: {text}</span>
+      {/* 1 行に切り詰めるので、全文は title で読めるようにする */}
+      <span className="min-w-0 flex-1 truncate" title={text}>
+        VoiceCord: {text}
+      </span>
       <span className="shrink-0 underline">詳細</span>
     </button>
   )
@@ -420,14 +428,15 @@ function StatusSection(): React.JSX.Element {
   const info = usePopout((s) => s.anchorInfo)
   const connection = useStore((s) => s.connection)
   const detail = useStore((s) => s.connectionDetail)
+  const krispHint = useStore((s) => s.krispHint && s.connection === 'waiting')
   const state = CONNECTION[connection]
   const problems = status ? statusProblems(status) : []
   const tierWarning = info !== null && info.tier !== null && info.tier > 2
   // 普段は見ない診断の値なので畳んでおくが、不具合があるときは開いておく(畳んだ中に隠さない)。
   // 開いた後に不具合が出た・変わった場合も同じ理由で開く。有無ではなく内容で見るのは、
   // 畳んだ後に別の不具合が増えても気付けるようにするため。内容が同じなら畳んだままにする。
-  const hasIssue = problems.length > 0 || Boolean(info?.fabReason) || tierWarning
-  const issueKey = hasIssue ? JSON.stringify([problems, info?.fabReason ?? null, tierWarning]) : ''
+  const hasIssue = problems.length > 0 || Boolean(info?.fabReason) || tierWarning || krispHint
+  const issueKey = hasIssue ? JSON.stringify([problems, info?.fabReason ?? null, tierWarning, krispHint]) : ''
   const [expanded, setExpanded] = useState(hasIssue)
   useEffect(() => {
     if (issueKey !== '') setExpanded(true)
@@ -444,6 +453,7 @@ function StatusSection(): React.JSX.Element {
       status.sampleRate === null ? '未計測' : `${status.sampleRate} Hz（${status.frameSamples ?? '?'} サンプル）`
     ])
   }
+  if (krispHint) rows.push(['VC 検出', 'Krisp の処理を検出できません（ノイズ抑制を Krisp にし、ミュートを解除）'])
   if (info) {
     rows.push([
       'ボタン',

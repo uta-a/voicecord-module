@@ -191,6 +191,8 @@ function main(): void {
     let lowTierSince: number | null = null
     let warnedTier = false
     const warnedFab = new Set<FabReason>()
+    /** UI へ最後に伝えた「Discord の画面上で VC に居るか」。変わったときだけ伝える */
+    let sentDiscordInVc: boolean | null = null
 
     const wireButton = (b: HTMLElement): HTMLElement => {
       b.addEventListener('click', (e) => {
@@ -258,6 +260,14 @@ function main(): void {
 
       if (s.button !== null || !inVc) missingSince = null
       else if (missingSince === null) missingSince = now
+
+      // 純正のサウンドボードボタンは VC に居る間しか無い。engine の vc 通知は Krisp の処理に
+      // 頼っていて、ノイズ抑制が Krisp 以外だと来ないので、画面側の在席を別に伝える
+      const grafted = s.button !== null
+      if (ui && grafted !== sentDiscordInVc) {
+        sentDiscordInVc = grafted
+        ui.setDiscordInVc(grafted)
+      }
 
       const d = decideFab({
         uiMounted: ui !== null,

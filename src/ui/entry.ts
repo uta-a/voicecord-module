@@ -42,6 +42,8 @@ export interface UiController {
   stopAll: () => void
   /** VoiceCord で鳴らしている純正サウンドボードのサウンド ID が変わったら呼ぶ（登録時にも 1 回呼ぶ） */
   onSoundboardPlayingChange: (cb: (ids: string[]) => void) => () => void
+  /** Discord の画面上で VC に居るか（音声パネルのサウンドボードボタンに接ぎ木できているか） */
+  setDiscordInVc: (inVc: boolean) => void
 }
 
 /** DOM が使えるようになってから呼ぶこと */
@@ -88,6 +90,7 @@ export function mount(container: HTMLElement): UiController {
         last = ids
         cb(ids)
       })
-    }
+    },
+    setDiscordInVc: (inVc) => useStore.getState().setDiscordInVc(inVc)
   }
 }

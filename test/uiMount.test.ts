@@ -3,7 +3,7 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import App from '../src/ui/App.js'
-import { playingSoundboardIds, useStore, type Voice } from '../src/ui/store.js'
+import { KRISP_HINT, playingSoundboardIds, useStore, type Voice } from '../src/ui/store.js'
 import { usePopout } from '../src/ui/popout.js'
 import { voiceMatchDb } from '../src/ui/lib/calibration.js'
 import { createShell, type Shell } from '../src/preload/shell.js'
@@ -445,6 +445,63 @@ describe('UI のマウント', () => {
     await act(async () => {
       usePopout.getState().setOpen(false)
     })
+  })
+
+  it('Krisp の処理を検出できないときは、帯と接続状態に案内が出る', async () => {
+    try {
+      await act(async () => {
+        useStore.setState({ krispHint: true, connection: 'waiting' })
+        usePopout.setState({ anchor, status: okStatus, anchorInfo: null, view: 'main' })
+        usePopout.getState().setOpen(true)
+      })
+      // 平常時(attached・問題なし)でも帯を出す。切れて読めないので全文を title に入れる
+      const band = [...shell.portal.querySelectorAll<HTMLElement>('[title]')].find(
+        (el) => el.getAttribute('title') === KRISP_HINT
+      )
+      expect(band).toBeDefined()
+      expect(band!.textContent).toContain(KRISP_HINT)
+
+      await act(async () => {
+        shell.portal.querySelector<HTMLButtonElement>('button[aria-label="VoiceCord の設定"]')!.click()
+      })
+      // 診断は最初から開いておく
+      expect(findButton('詳細')!.getAttribute('aria-expanded')).toBe('true')
+      expect(shell.portal.textContent).toContain('VC 検出')
+      expect(shell.portal.textContent).toContain('Krisp の処理を検出できません（ノイズ抑制を Krisp にし、ミュートを解除）')
+
+      // 切断やアタッチ失敗で待機中でなくなったら、案内が残っていても出さない
+      await act(async () => {
+        useStore.setState({ connection: 'disconnected' })
+      })
+      expect(shell.portal.textContent).not.toContain('VC 検出')
+    } finally {
+      await act(async () => {
+        useStore.setState({ krispHint: false, connection: 'connected' })
+        usePopout.getState().setOpen(false)
+      })
+    }
+  })
+
+  it('既存の問題があるときは、帯はそちらを優先する', async () => {
+    try {
+      await act(async () => {
+        useStore.setState({ krispHint: true })
+        usePopout.setState({
+          anchor,
+          status: { ...okStatus, engine: 'failed', lastError: 'frida を読み込めませんでした' },
+          anchorInfo: null,
+          view: 'main'
+        })
+        usePopout.getState().setOpen(true)
+      })
+      expect(shell.portal.textContent).toContain('frida を読み込めませんでした')
+      expect(shell.portal.textContent).not.toContain(KRISP_HINT)
+    } finally {
+      await act(async () => {
+        useStore.setState({ krispHint: false })
+        usePopout.getState().setOpen(false)
+      })
+    }
   })
 
   it('ポップアウトから開いたダイアログは、ポップアウトを勝手に閉じない', async () => {
