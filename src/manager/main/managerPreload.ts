@@ -18,10 +18,10 @@ const MCH = {
 
 contextBridge.exposeInMainWorld('vcm', {
   list: () => ipcRenderer.invoke(MCH.list),
-  apply: (resourcesDir: string, extraChain: string[]) =>
-    ipcRenderer.invoke(MCH.apply, resourcesDir, extraChain),
-  unpatch: (resourcesDir: string, mode: 'full' | 'voicecordOnly') =>
-    ipcRenderer.invoke(MCH.unpatch, resourcesDir, mode),
+  apply: (resourcesDir: string, extraChain: string[], forceClose: boolean) =>
+    ipcRenderer.invoke(MCH.apply, resourcesDir, extraChain, forceClose),
+  unpatch: (resourcesDir: string, mode: 'full' | 'voicecordOnly', forceClose: boolean) =>
+    ipcRenderer.invoke(MCH.unpatch, resourcesDir, mode, forceClose),
   openFolder: (dir: string) => ipcRenderer.invoke(MCH.openFolder, dir),
   restoreDoc: () => ipcRenderer.invoke(MCH.restoreDoc)
 })

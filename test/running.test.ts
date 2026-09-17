@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isRunning, parseTasklist, tasklistCommand } from '../src/manager/patch/running.js'
+import { isRunning, parseTasklist, taskkillCommand, tasklistCommand } from '../src/manager/patch/running.js'
 
 // 実機（Windows 11）の tasklist から採った出力
 const RUNNING = [
@@ -64,5 +64,11 @@ describe('tasklistCommand', () => {
       'CSV',
       '/NH'
     ])
+  })
+})
+
+describe('taskkillCommand', () => {
+  it('イメージ名でツリーごと強制終了する引数配列を返す（シェルを介さない）', () => {
+    expect(taskkillCommand('DiscordCanary.exe')).toEqual(['taskkill', '/F', '/T', '/IM', 'DiscordCanary.exe'])
   })
 })

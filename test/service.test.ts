@@ -21,7 +21,10 @@ const plain = (): Buffer =>
 const foreign = (p: string): Buffer =>
   buildFlatAsar({ 'index.js': `require(${JSON.stringify(p)})`, 'package.json': SHIM_PACKAGE_JSON })
 
-function makeDeps(lister: (image: string) => string = () => NOT_RUNNING): ServiceDeps {
+function makeDeps(
+  lister: (image: string) => string = () => NOT_RUNNING,
+  overrides: Partial<ServiceDeps> = {}
+): ServiceDeps {
   const localAppData = path.join(root, 'Local')
   const paths = voiceCordPaths({ localAppData, appData: path.join(root, 'Roaming') }, path.join)
   return {
@@ -32,9 +35,49 @@ function makeDeps(lister: (image: string) => string = () => NOT_RUNNING): Servic
     join: path.join,
     dirname: path.dirname,
     listProcesses: lister,
-    now: () => '2026-09-07T12:00:00.000Z'
+    killProcess: () => {
+      throw new Error('強制終了は呼ばれない想定です')
+    },
+    sleep: () => {},
+    startDiscord: () => {
+      throw new Error('再起動は呼ばれない想定です')
+    },
+    now: () => '2026-09-07T12:00:00.000Z',
+    ...overrides
   }
 }
+
+/**
+ * 強制終了の流れを偽装する。kill されてから `pollsUntilExit` 回目の確認で終了したことにする。
+ * Infinity なら終了しない。
+ */
+function makeForceDeps(pollsUntilExit = 0) {
+  const calls = { killed: [] as string[], started: [] as Array<[string, string]>, slept: 0 }
+  let killed = false
+  let pollsAfterKill = 0
+  const lister = (image: string): string => {
+    if (image !== 'DiscordCanary.exe') return NOT_RUNNING
+    if (!killed) return RUNNING
+    if (pollsAfterKill++ < pollsUntilExit) return RUNNING
+    return NOT_RUNNING
+  }
+  const d = makeDeps(lister, {
+    killProcess: (image) => {
+      calls.killed.push(image)
+      killed = true
+    },
+    sleep: () => {
+      calls.slept++
+    },
+    startDiscord: (rootDir, exeName) => {
+      calls.started.push([rootDir, exeName])
+    }
+  })
+  return { d, calls }
+}
+
+const canaryRoot = (): string => path.join(root, 'Local', 'DiscordCanary')
+const putUpdateExe = (): void => fs.writeFileSync(path.join(canaryRoot(), 'Update.exe'), '')
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'vc-svc-'))
@@ -111,7 +154,8 @@ describe('applyTo', () => {
     expect(listInstalls(deps)[0]).toMatchObject({ state: 'voicecord', active: true })
   })
 
-  it('Discord が起動中なら断る（強制終了はしない）', () => {
+  it('Discord が起動中なら断る（既定では強制終了しない）', () => {
+    // killProcess / startDiscord は呼ばれると例外を投げる既定の偽装のまま
     const d = makeDeps((image) => (image === 'DiscordCanary.exe' ? RUNNING : NOT_RUNNING))
     const r = applyTo(d, canaryResources)
     expect(r.ok).toBe(false)
@@ -119,6 +163,125 @@ describe('applyTo', () => {
     // 一切触っていないこと
     expect(classifyAppAsar(fs, path.join(canaryResources, 'app.asar')).kind).toBe('plain')
     expect(fs.existsSync(d.paths.dist)).toBe(false)
+  })
+
+  it('forceClose なら exe 名で強制終了し、終了を待ってから適用して再起動する', () => {
+    putUpdateExe()
+    const { d, calls } = makeForceDeps(2)
+    const r = applyTo(d, canaryResources, { forceClose: true })
+    expect(r.ok).toBe(true)
+    expect(calls.killed).toEqual(['DiscordCanary.exe'])
+    // 2 回は起動中のままだったので、その間は待っている
+    expect(calls.slept).toBe(2)
+    expect(classifyAppAsar(fs, path.join(canaryResources, 'app.asar')).kind).toBe('shim')
+    expect(calls.started).toEqual([[canaryRoot(), 'DiscordCanary.exe']])
+    expect(r.message).toContain('Discord Canary の再起動を開始しました')
+  })
+
+  it('forceClose でも終了しなければ適用せず、再起動もしない', () => {
+    putUpdateExe()
+    const { d, calls } = makeForceDeps(Infinity)
+    const r = applyTo(d, canaryResources, { forceClose: true })
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('Discord Canary を終了できませんでした')
+    expect(calls.killed).toEqual(['DiscordCanary.exe'])
+    expect(classifyAppAsar(fs, path.join(canaryResources, 'app.asar')).kind).toBe('plain')
+    expect(fs.existsSync(d.paths.dist)).toBe(false)
+    expect(calls.started).toEqual([])
+  })
+
+  it('forceClose でも、起動状態を判定できなければ強制終了せずに断る', () => {
+    putUpdateExe()
+    const calls = { killed: 0, started: 0 }
+    const d = makeDeps(
+      () => {
+        throw new Error('tasklist が無い')
+      },
+      {
+        killProcess: () => {
+          calls.killed++
+        },
+        startDiscord: () => {
+          calls.started++
+        }
+      }
+    )
+    const r = applyTo(d, canaryResources, { forceClose: true })
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('起動状態を確認できません')
+    expect(classifyAppAsar(fs, path.join(canaryResources, 'app.asar')).kind).toBe('plain')
+    expect(calls).toEqual({ killed: 0, started: 0 })
+  })
+
+  it('forceClose で終了しなければ、タスクマネージャーでの終了を案内する', () => {
+    const { d } = makeForceDeps(Infinity)
+    expect(applyTo(d, canaryResources, { forceClose: true }).message).toContain('タスクマネージャーで DiscordCanary.exe を終了')
+  })
+
+  it('強制終了した後は、本処理が例外を投げても再起動する', () => {
+    putUpdateExe()
+    const { d, calls } = makeForceDeps(0)
+    const failingFs = Object.create(d.fs) as ServiceDeps['fs']
+    failingFs.renameSync = (from, to) => {
+      if (String(to) === d.paths.state) throw new Error('状態を書けません')
+      return fs.renameSync(from, to)
+    }
+    const r = applyTo({ ...d, fs: failingFs }, canaryResources, { forceClose: true })
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('状態を書けません')
+    expect(calls.started).toHaveLength(1)
+  })
+
+  it('再起動に失敗したら手動での起動を案内し、本処理の結果は保つ', () => {
+    putUpdateExe()
+    const { d } = makeForceDeps(0)
+    d.startDiscord = () => {
+      throw new Error('起動できません')
+    }
+    const r = applyTo(d, canaryResources, { forceClose: true })
+    expect(r.ok).toBe(true)
+    expect(r.message).toContain('Discord Canary を手動で起動してください')
+  })
+
+  it('taskkill が失敗しても、実際に終了していれば続行する', () => {
+    putUpdateExe()
+    const { d, calls } = makeForceDeps(0)
+    const kill = d.killProcess
+    d.killProcess = (image) => {
+      kill(image)
+      throw new Error('プロセスが見つかりません')
+    }
+    const r = applyTo(d, canaryResources, { forceClose: true })
+    expect(r.ok).toBe(true)
+    expect(calls.started).toHaveLength(1)
+  })
+
+  it('起動していなければ forceClose でも終了も再起動もしない', () => {
+    putUpdateExe()
+    // 既定の偽装は killProcess / startDiscord が呼ばれると例外を投げる
+    const r = applyTo(deps, canaryResources, { forceClose: true })
+    expect(r.ok).toBe(true)
+    expect(r.message).not.toContain('再起動')
+  })
+
+  it('Update.exe が無ければ再起動せず、手動で起動するよう案内する', () => {
+    const { d, calls } = makeForceDeps(0)
+    const r = applyTo(d, canaryResources, { forceClose: true })
+    expect(r.ok).toBe(true)
+    expect(classifyAppAsar(fs, path.join(canaryResources, 'app.asar')).kind).toBe('shim')
+    expect(calls.started).toEqual([])
+    expect(r.message).toContain('手動で起動してください')
+  })
+
+  it('強制終了した後は、適用に失敗しても再起動する', () => {
+    putUpdateExe()
+    fs.rmSync(path.join(root, 'payload'), { recursive: true, force: true })
+    const { d, calls } = makeForceDeps(0)
+    const r = applyTo(d, canaryResources, { forceClose: true })
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('ビルド成果物がありません')
+    expect(calls.started).toHaveLength(1)
+    expect(r.message).toContain('Discord Canary の再起動を開始しました')
   })
 
   it('他 mod を引き継いだことを伝える', () => {
@@ -187,6 +350,43 @@ describe('unpatchFrom', () => {
     const r = unpatchFrom(d, canaryResources, 'full')
     expect(r.ok).toBe(false)
     expect(classifyAppAsar(fs, path.join(canaryResources, 'app.asar')).kind).toBe('shim')
+  })
+
+  it('forceClose なら強制終了してから外し、再起動する', () => {
+    putUpdateExe()
+    const { d, calls } = makeForceDeps(1)
+    const r = unpatchFrom(d, canaryResources, 'full', { forceClose: true })
+    expect(r.ok).toBe(true)
+    expect(calls.killed).toEqual(['DiscordCanary.exe'])
+    expect(calls.slept).toBe(1)
+    expect(classifyAppAsar(fs, path.join(canaryResources, 'app.asar')).kind).toBe('plain')
+    expect(calls.started).toEqual([[canaryRoot(), 'DiscordCanary.exe']])
+    expect(r.message).toContain('Discord Canary の再起動を開始しました')
+  })
+
+  it('forceClose でも終了しなければ外さない', () => {
+    const { d, calls } = makeForceDeps(Infinity)
+    const r = unpatchFrom(d, canaryResources, 'full', { forceClose: true })
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('終了できませんでした')
+    expect(classifyAppAsar(fs, path.join(canaryResources, 'app.asar')).kind).toBe('shim')
+    expect(calls.started).toEqual([])
+  })
+
+  it('voicecordOnly も forceClose で強制終了してから外し、再起動する', () => {
+    putUpdateExe()
+    const { d, calls } = makeForceDeps(0)
+    const r = unpatchFrom(d, canaryResources, 'voicecordOnly', { forceClose: true })
+    expect(r.ok).toBe(true)
+    expect(calls.killed).toEqual(['DiscordCanary.exe'])
+    expect(calls.started).toHaveLength(1)
+  })
+
+  it('起動していなければ forceClose でも終了も再起動もしない', () => {
+    putUpdateExe()
+    const r = unpatchFrom(deps, canaryResources, 'full', { forceClose: true })
+    expect(r.ok).toBe(true)
+    expect(r.message).not.toContain('再起動')
   })
 
   it('voicecordOnly は他 mod を残す', () => {

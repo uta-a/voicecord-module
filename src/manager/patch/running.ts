@@ -8,7 +8,7 @@
  * イメージ名で見れば十分に区別できる。同じブランチの別バージョンが同時に走ることは
  * ないため、実行ファイルのパスまで見る必要はない。
  *
- * 強制終了はしない。ユーザーに終了してもらう。
+ * 既定では終了させず、ユーザーに終了してもらう。ユーザーが明示的に選んだときだけ強制終了する。
  */
 
 /** tasklist の出力を返す関数を注入する（テストのため） */
@@ -58,4 +58,12 @@ export function isRunning(list: ProcessLister, imageName: string): RunningCheck 
 /** 既定の実装。tasklist はロケールに関係なく CSV を吐く */
 export function tasklistCommand(imageName: string): string[] {
   return ['tasklist', '/FI', `IMAGENAME eq ${imageName}`, '/FO', 'CSV', '/NH']
+}
+
+/**
+ * 強制終了の引数配列。ユーザーが「終了して適用」などを明示的に選んだときだけ使う。
+ * /T で子プロセス（GPU / レンダラなど）ごと落とす。イメージ名は BRANCHES の固定値だけを渡す。
+ */
+export function taskkillCommand(imageName: string): string[] {
+  return ['taskkill', '/F', '/T', '/IM', imageName]
 }

@@ -1,5 +1,5 @@
 import { applyPatch, planPatch, targetFor, unpatch, type PatchFs, type UnpatchMode } from './patch/apply.js'
-import { isRunning, type ProcessLister } from './patch/running.js'
+import { isRunning, type ProcessLister, type RunningCheck } from './patch/running.js'
 import {
   installState,
   isVoiceCordActive,
@@ -21,7 +21,8 @@ import {
 /**
  * マネージャの操作をひとまとめにした層。Electron に依存しないのでテストできる。
  *
- * ここでは Discord を強制終了しない。起動中なら適用を断って理由を返す。
+ * 既定では Discord を終了させない。起動中なら適用を断って理由を返す。
+ * ユーザーが明示的に選んだ（forceClose）ときだけ強制終了し、終わったら再起動する。
  */
 
 export interface ServiceFs extends PatchFs, ScanFs, StateFs {
@@ -40,6 +41,12 @@ export interface ServiceDeps {
   join: (...p: string[]) => string
   dirname: (p: string) => string
   listProcesses: ProcessLister
+  /** そのイメージ名のプロセスを強制終了する。プロセスが無いなどで失敗したら例外を投げてよい */
+  killProcess: (imageName: string) => void
+  /** 終了待ちの間隔を空ける（テストでは即時にする） */
+  sleep: (ms: number) => void
+  /** <rootDir>\Update.exe --processStart <exeName> で Discord を起動する */
+  startDiscord: (rootDir: string, exeName: string) => void
   now: () => string
 }
 
@@ -116,20 +123,35 @@ export type OpResult = { ok: true; message: string } | { ok: false; message: str
 export interface ApplyOptions {
   /** 連鎖に足したい他 mod の patcher（Canary での連鎖テスト用） */
   extraChain?: readonly string[]
+  /** 起動中なら強制終了してから行い、終わったら再起動する（ユーザーが明示的に選んだときだけ） */
+  forceClose?: boolean
+}
+
+export interface UnpatchOptions {
+  /** 起動中なら強制終了してから行い、終わったら再起動する（ユーザーが明示的に選んだときだけ） */
+  forceClose?: boolean
 }
 
 export function applyTo(deps: ServiceDeps, resourcesDir: string, opts: ApplyOptions = {}): OpResult {
   const install = findInstall(deps, resourcesDir)
   if (!install) return { ok: false, message: `インストールが見つかりません: ${resourcesDir}` }
 
-  const check = isRunning(deps.listProcesses, install.spec.exeName)
-  if (check.running) {
-    return {
-      ok: false,
-      message: `${install.spec.label} が起動しています。終了してから実行してください（PID ${check.pids.join(', ') || '不明'}）`
-    }
-  }
+  return withDiscordClosed(
+    deps,
+    install,
+    opts.forceClose === true,
+    (check) =>
+      `${install.spec.label} が起動しています。終了してから実行してください（PID ${check.pids.join(', ') || '不明'}）`,
+    () => applyToInstall(deps, install, resourcesDir, opts)
+  )
+}
 
+function applyToInstall(
+  deps: ServiceDeps,
+  install: DiscordInstall,
+  resourcesDir: string,
+  opts: ApplyOptions
+): OpResult {
   const t = targetFor(resourcesDir, deps.join)
   const plan = planPatch(deps.fs, t, { voicecordPatcher: deps.paths.patcher, extraChain: opts.extraChain })
   if (!plan.ok) return { ok: false, message: plan.reason }
@@ -178,18 +200,30 @@ export function applyTo(deps: ServiceDeps, resourcesDir: string, opts: ApplyOpti
   }
 }
 
-export function unpatchFrom(deps: ServiceDeps, resourcesDir: string, mode: UnpatchMode): OpResult {
+export function unpatchFrom(
+  deps: ServiceDeps,
+  resourcesDir: string,
+  mode: UnpatchMode,
+  opts: UnpatchOptions = {}
+): OpResult {
   const install = findInstall(deps, resourcesDir)
   if (!install) return { ok: false, message: `インストールが見つかりません: ${resourcesDir}` }
 
-  const check = isRunning(deps.listProcesses, install.spec.exeName)
-  if (check.running) {
-    return {
-      ok: false,
-      message: `${install.spec.label} が起動しています。終了してから実行してください`
-    }
-  }
+  return withDiscordClosed(
+    deps,
+    install,
+    opts.forceClose === true,
+    () => `${install.spec.label} が起動しています。終了してから実行してください`,
+    () => unpatchFromInstall(deps, install, resourcesDir, mode)
+  )
+}
 
+function unpatchFromInstall(
+  deps: ServiceDeps,
+  install: DiscordInstall,
+  resourcesDir: string,
+  mode: UnpatchMode
+): OpResult {
   const t = targetFor(resourcesDir, deps.join)
   let result
   try {
@@ -207,6 +241,82 @@ export function unpatchFrom(deps: ServiceDeps, resourcesDir: string, mode: Unpat
     ok: true,
     message: `${install.spec.label} から VoiceCord を外しました（${result.remaining.length} 件の他 mod は残しています）`
   }
+}
+
+/** 強制終了後、終了を確かめる間隔と上限 */
+const EXIT_POLL_MS = 250
+const EXIT_TIMEOUT_MS = 10_000
+
+/**
+ * Discord が起動していない状態で op を行う。
+ *
+ * 起動中なら、forceClose でなければ断る。forceClose なら強制終了して終了を確かめてから行い、
+ * op の成否にかかわらず最後に再起動する（落としたまま放置しない）。
+ */
+function withDiscordClosed(
+  deps: ServiceDeps,
+  install: DiscordInstall,
+  forceClose: boolean,
+  refuse: (check: RunningCheck) => string,
+  op: () => OpResult
+): OpResult {
+  const { exeName, label } = install.spec
+  const check = isRunning(deps.listProcesses, exeName)
+  if (!check.running) return op()
+  if (!forceClose) return { ok: false, message: refuse(check) }
+  // tasklist が失敗して判定できないだけのときは、落とすべきプロセスがあるか分からないので進まない
+  if (check.pids.length === 0) {
+    return { ok: false, message: `${label} の起動状態を確認できません。手動で終了してからもう一度実行してください` }
+  }
+
+  try {
+    deps.killProcess(exeName)
+  } catch {
+    // 確認の間に自分で終了していても taskkill は失敗する。終わったかどうかは下で確かめる
+  }
+  // 終了を確かめられないまま差し替えに進むと、ロックされた app.asar を中途半端に触りうる
+  if (!waitForExit(deps, exeName)) {
+    return {
+      ok: false,
+      message: `${label} を終了できませんでした。タスクマネージャーで ${exeName} を終了してから、もう一度実行してください`
+    }
+  }
+
+  // op が例外を投げても（状態ファイルの書き込み失敗など）、落としたまま放置しない
+  let result: OpResult
+  try {
+    result = op()
+  } catch (e) {
+    result = { ok: false, message: msg(e) }
+  }
+  return { ...result, message: `${result.message}\n${restartDiscord(deps, install)}` }
+}
+
+/** 終了したら true。判定できない（isRunning が running:true を返す）ままなら false */
+function waitForExit(deps: ServiceDeps, exeName: string): boolean {
+  for (let waited = 0; ; waited += EXIT_POLL_MS) {
+    if (!isRunning(deps.listProcesses, exeName).running) return true
+    if (waited >= EXIT_TIMEOUT_MS) return false
+    deps.sleep(EXIT_POLL_MS)
+  }
+}
+
+/** 再起動の結果をメッセージの 1 行で返す */
+function restartDiscord(deps: ServiceDeps, install: DiscordInstall): string {
+  // Update.exe は app-<version> の親（%LOCALAPPDATA%\<dirName>）にある。
+  // app-<version> 内の exe を直接起動すると、更新や古い版の掃除が働かない
+  const rootDir = deps.dirname(install.appDir)
+  const manual = `${install.spec.label} を手動で起動してください`
+  if (!deps.fs.existsSync(deps.join(rootDir, 'Update.exe'))) {
+    return `Update.exe が見つからないため再起動できませんでした。${manual}`
+  }
+  try {
+    deps.startDiscord(rootDir, install.spec.exeName)
+  } catch (e) {
+    return `${install.spec.label} を再起動できませんでした（${msg(e)}）。${manual}`
+  }
+  // spawn の失敗は後から非同期に届くので、ここで分かるのは起動を始めたところまで
+  return `${install.spec.label} の再起動を開始しました`
 }
 
 function findInstall(deps: ServiceDeps, resourcesDir: string): DiscordInstall | undefined {

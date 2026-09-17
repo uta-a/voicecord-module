@@ -8,8 +8,8 @@ import type { InstallRow, OpResult } from '../service.js'
 
 interface Vcm {
   list(): Promise<InstallRow[]>
-  apply(resourcesDir: string, extraChain: string[]): Promise<OpResult>
-  unpatch(resourcesDir: string, mode: 'full' | 'voicecordOnly'): Promise<OpResult>
+  apply(resourcesDir: string, extraChain: string[], forceClose: boolean): Promise<OpResult>
+  unpatch(resourcesDir: string, mode: 'full' | 'voicecordOnly', forceClose: boolean): Promise<OpResult>
   openFolder(dir: string): Promise<void>
   restoreDoc(): Promise<void>
 }
@@ -74,7 +74,7 @@ function renderRow(row: InstallRow, refresh: () => void): HTMLElement {
     box.append(el('div', 'warn', 'この状態では操作しません。復旧手順を確認してください。'))
   }
   if (row.running) {
-    box.append(el('div', 'warn', `${row.label} が起動しています。終了してから操作してください。`))
+    box.append(el('div', 'warn', `${row.label} が起動しています。終了してから操作するか、「終了して〜」のボタンを使ってください。`))
   }
 
   // Canary での連鎖テスト用。既にそのインストールに入っている mod は
@@ -90,6 +90,9 @@ function renderRow(row: InstallRow, refresh: () => void): HTMLElement {
 
   const actions = el('div', 'actions')
   const busy = row.running || row.state === 'broken'
+  // 起動中でも、ユーザーが明示的に選べば強制終了して行える。異常な状態では出さない
+  const canForce = row.running && row.state !== 'broken'
+  const forceWarning = '送信前のメッセージなど保存されていない内容は失われます。'
 
   const applyBtn = document.createElement('button')
   applyBtn.className = 'primary'
@@ -98,19 +101,47 @@ function renderRow(row: InstallRow, refresh: () => void): HTMLElement {
   applyBtn.addEventListener('click', () => {
     void run(() => {
       const extra = chainInput.value.trim()
-      return vcm.apply(row.resourcesDir, extra ? [extra] : [])
+      return vcm.apply(row.resourcesDir, extra ? [extra] : [], false)
     }, refresh)
   })
   actions.append(applyBtn)
+
+  if (canForce) {
+    const forceApplyBtn = document.createElement('button')
+    forceApplyBtn.className = 'primary'
+    forceApplyBtn.textContent = row.active ? '終了して再適用' : '終了して適用'
+    forceApplyBtn.addEventListener('click', () => {
+      const ok = confirm(`${row.label} を強制終了して適用します。\n${forceWarning}よろしいですか?`)
+      if (!ok) return
+      void run(() => {
+        const extra = chainInput.value.trim()
+        return vcm.apply(row.resourcesDir, extra ? [extra] : [], true)
+      }, refresh)
+    })
+    actions.append(forceApplyBtn)
+  }
 
   if (row.state === 'voicecord') {
     const onlyBtn = document.createElement('button')
     onlyBtn.textContent = 'VoiceCord だけ外す'
     onlyBtn.disabled = busy
     onlyBtn.addEventListener('click', () => {
-      void run(() => vcm.unpatch(row.resourcesDir, 'voicecordOnly'), refresh)
+      void run(() => vcm.unpatch(row.resourcesDir, 'voicecordOnly', false), refresh)
     })
     actions.append(onlyBtn)
+
+    if (canForce) {
+      const forceOnlyBtn = document.createElement('button')
+      forceOnlyBtn.textContent = '終了して VoiceCord だけ外す'
+      forceOnlyBtn.addEventListener('click', () => {
+        const ok = confirm(
+          `${row.label} を強制終了して VoiceCord を外します。\n${forceWarning}よろしいですか?`
+        )
+        if (!ok) return
+        void run(() => vcm.unpatch(row.resourcesDir, 'voicecordOnly', true), refresh)
+      })
+      actions.append(forceOnlyBtn)
+    }
   }
 
   if (row.state === 'voicecord' || row.state === 'otherMod') {
@@ -124,9 +155,24 @@ function renderRow(row: InstallRow, refresh: () => void): HTMLElement {
         `${row.label} を素の状態に戻します。\nVencord など他の mod も同時に外れます。続けますか?`
       )
       if (!ok) return
-      void run(() => vcm.unpatch(row.resourcesDir, 'full'), refresh)
+      void run(() => vcm.unpatch(row.resourcesDir, 'full', false), refresh)
     })
     actions.append(fullBtn)
+
+    if (canForce) {
+      const forceFullBtn = document.createElement('button')
+      forceFullBtn.className = 'danger'
+      forceFullBtn.textContent = '終了して素の Discord に戻す'
+      forceFullBtn.addEventListener('click', () => {
+        const ok = confirm(
+          `${row.label} を強制終了して素の状態に戻します。\n` +
+            `Vencord など他の mod も同時に外れます。${forceWarning}よろしいですか?`
+        )
+        if (!ok) return
+        void run(() => vcm.unpatch(row.resourcesDir, 'full', true), refresh)
+      })
+      actions.append(forceFullBtn)
+    }
   }
 
   const openBtn = document.createElement('button')
@@ -138,12 +184,21 @@ function renderRow(row: InstallRow, refresh: () => void): HTMLElement {
   return box
 }
 
+let running = false
+
 async function run(op: () => Promise<OpResult>, refresh: () => void): Promise<void> {
+  // 強制終了つきの操作は main が終了待ちで止まる。その間の 2 回目の押下を受け付けると、
+  // 再起動した直後の Discord をもう一度落としてしまう
+  if (running) return
+  running = true
+  for (const b of Array.from(listEl.querySelectorAll('button'))) b.disabled = true
   say(null)
   try {
     say(await op())
   } catch (e) {
     say({ ok: false, message: e instanceof Error ? e.message : String(e) })
+  } finally {
+    running = false
   }
   refresh()
 }
