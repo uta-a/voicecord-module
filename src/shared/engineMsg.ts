@@ -12,12 +12,6 @@ import type { EngineEvent as RawEngineEvent } from './types.js'
  * この電文の本体には含めない。
  */
 
-/**
- * patcher だけが engine へ投げる要求。renderer からは呼べない（CH に載せない）。
- * OS グローバルの緊急停止ホットキーから来る。再生を全部止め、ゲートを即座に閉じる。
- */
-export const ENGINE_EMERGENCY_STOP = 'voicecord:emergencyStop'
-
 /** patcher → engine。invoke の中身をそのまま転送する */
 export interface EngineRequest {
   t: 'req'
