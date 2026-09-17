@@ -53,7 +53,8 @@ const okStatus = {
   discordBuild: 'canary',
   discordVersion: '1.0.1169',
   lastError: null,
-  degraded: []
+  degraded: [],
+  vcActive: false
 }
 
 function findButton(text: string): HTMLButtonElement | undefined {
@@ -434,7 +435,8 @@ describe('UI のマウント', () => {
           discordBuild: 'canary',
           discordVersion: '1.0.1169',
           lastError: 'frida を読み込めませんでした',
-          degraded: []
+          degraded: [],
+          vcActive: false
         }
       })
       usePopout.getState().setOpen(true)

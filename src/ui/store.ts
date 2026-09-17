@@ -795,7 +795,15 @@ export const useStore = create<State>((rawSet, get) => {
       if (seq !== connectSeq) return // より新しい切替に追い越された
       if (r.ok) {
         // VC 在席は hook.js の 'vc' で確定する。それまで待機中。
-        set({ attached: true, connection: 'waiting', connectionDetail: `${r.label}  PID ${r.pid}` })
+        // ただし vc は変化したときしか来ないので、attach を待つ間に届いた分(connected)を
+        // 上書きしない。UI を再読み込みした後は再送されないため、main が覚えている値も見る。
+        const connected = r.vcActive || get().connection === 'connected'
+        set({
+          attached: true,
+          connection: connected ? 'connected' : 'waiting',
+          // 注入先が未検出(searching)だと pid は null。「PID null」と出さない
+          connectionDetail: r.pid === null ? r.label : `${r.label}  PID ${r.pid}`
+        })
         await api.setMaster(get().settings.master)
       } else {
         set({

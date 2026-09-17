@@ -94,6 +94,12 @@ export interface VoiceCordStatus {
   lastError: string | null
   /** patcher のサブシステムのうち起動に失敗したもの */
   degraded: Array<{ name: string; error: string }>
+  /**
+   * hook.js が最後に送った VC 在席（vc イベントの active）。
+   * vc は変化したときしか来ないので、UI の再読み込み後はこれで在席を知る。
+   * attach していなければ false
+   */
+  vcActive: boolean
 }
 
 /**

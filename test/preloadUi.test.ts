@@ -24,7 +24,8 @@ const STATUS: VoiceCordStatus = {
   discordBuild: 'canary',
   discordVersion: '1.0.1099',
   lastError: null,
-  degraded: []
+  degraded: [],
+  vcActive: false
 }
 
 describe('clampToViewport', () => {

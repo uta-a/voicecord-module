@@ -448,7 +448,8 @@ function main(): void {
         discordBuild: 'unknown',
         discordVersion: 'unknown',
         lastError: `main プロセスと通信できません: ${e instanceof Error ? e.message : String(e)}`,
-        degraded: []
+        degraded: [],
+        vcActive: false
       })
     })
     update()

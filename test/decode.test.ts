@@ -99,7 +99,8 @@ const STATUS: VoiceCordStatus = {
   discordBuild: 'canary',
   discordVersion: '1.0.1165',
   lastError: null,
-  degraded: []
+  degraded: [],
+  vcActive: false
 }
 
 interface FakeIpc extends IpcRendererLike {
@@ -170,9 +171,18 @@ describe('createApi', () => {
     expect(await api.attach('canary')).toEqual({
       ok: true,
       pid: 4242,
-      label: 'canary 1.0.1165'
+      label: 'canary 1.0.1165',
+      vcActive: false
     })
     expect(ipc.calls.map((c) => c.ch)).toEqual([CH.getStatus])
+  })
+
+  it('attach は VC 在席も返す（Ctrl+R 後は vc が再送されないため、状態から拾う）', async () => {
+    const inVc = { ...STATUS, vcActive: true }
+    expect((await createApi(fakeIpc({ [CH.getStatus]: inVc }), stereo).attach('canary')).vcActive).toBe(true)
+    // attached でなければ、記録が残っていても VC 在席とはみなさない
+    const searching = { ...STATUS, engine: 'searching' as const, vcActive: true }
+    expect((await createApi(fakeIpc({ [CH.getStatus]: searching }), stereo).attach('canary')).vcActive).toBe(false)
   })
 
   it('エンジンが落ちているときだけ起こし直す', async () => {

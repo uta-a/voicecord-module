@@ -129,9 +129,10 @@ export function createMockApi(): Api {
     attach: async (build): Promise<AttachResult> => {
       // 実装では audio utility プロセスを探しに行く。ここは必ず見つかったことにする。
       // VC 在席（'vc'）とゲート情報は attach の少し後に届く、という実機の順番に合わせる。
+      // なので attach の時点ではまだ在席していない。
       later(200, () => emit({ ev: 'vc', active: true }))
       later(400, () => emit({ ev: 'gateInfo', conn: '0x0000mock' }))
-      return { ok: true, pid: 4242, label: `Discord ${build}（モック）` }
+      return { ok: true, pid: 4242, label: `Discord ${build}（モック）`, vcActive: false }
     },
     detach: async () => {
       emit({ ev: 'detached' })

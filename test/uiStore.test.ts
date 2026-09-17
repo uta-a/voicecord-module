@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMockApi } from '../src/ui/mockApi.js'
 import { recommendSourceVolume } from '../src/ui/lib/calibration.js'
-import type { Api, AppConfig, EngineEvent, SoundItem, SourceStats } from '../src/shared/types.js'
+import type { Api, AppConfig, AttachResult, EngineEvent, SoundItem, SourceStats } from '../src/shared/types.js'
 
 describe('UI store engine lifecycle', () => {
   afterEach(() => {
@@ -327,5 +327,91 @@ describe('UI store playSoundboardSound', () => {
     ])
     // 音量を揃える対象ではないので、未調整の通知は出さない
     expect(useStore.getState().status).toBe('')
+  })
+})
+
+describe('UI store connect', () => {
+  afterEach(() => {
+    vi.doUnmock('../src/ui/mockApi.js')
+    vi.resetModules()
+  })
+
+  // attach の結果を手で返せる api。init が呼ぶ 1 回目はすぐ返し、2 回目以降は pending に積む
+  async function setup(first: AttachResult): Promise<{
+    useStore: (typeof import('../src/ui/store.js'))['useStore']
+    emit: (p: EngineEvent) => void
+    pending: Array<(r: AttachResult) => void>
+  }> {
+    const listeners = new Set<(event: EngineEvent) => void>()
+    const pending: Array<(r: AttachResult) => void> = []
+    let calls = 0
+    const api: Api = {
+      ...createMockApi(),
+      attach: async () => {
+        if (calls++ === 0) return first
+        return new Promise<AttachResult>((resolve) => pending.push(resolve))
+      },
+      onEngineEvent: (listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      }
+    }
+    vi.doMock('../src/ui/mockApi.js', () => ({ mockApi: api }))
+    const { useStore } = await import('../src/ui/store.js')
+    await useStore.getState().init()
+    const emit = (p: EngineEvent): void => {
+      for (const l of listeners) l(p)
+    }
+    return { useStore, emit, pending }
+  }
+
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+  }
+
+  it('attach の結果が VC 在席なら、vc の通知を待たずに接続済みにする（Ctrl+R 後は再送されない）', async () => {
+    const { useStore } = await setup({ ok: true, pid: 4242, label: 'canary 1.0.1177', vcActive: true })
+    expect(useStore.getState().connection).toBe('connected')
+    expect(useStore.getState().attached).toBe(true)
+  })
+
+  it('attach の結果が VC 在席でなければ待機中にする', async () => {
+    const { useStore } = await setup({ ok: true, pid: 4242, label: 'canary 1.0.1177', vcActive: false })
+    expect(useStore.getState().connection).toBe('waiting')
+  })
+
+  it('attach を待っている間に vc:true が届いたら、結果で待機中に戻さない', async () => {
+    const { useStore, emit, pending } = await setup({ ok: true, pid: 1, label: 'canary 1.0.1177', vcActive: false })
+    const job = useStore.getState().connect('canary')
+    await flush()
+    expect(useStore.getState().connection).toBe('switching')
+    expect(pending).toHaveLength(1)
+    emit({ ev: 'vc', active: true })
+    expect(useStore.getState().connection).toBe('connected')
+    pending[0]!({ ok: true, pid: 1, label: 'canary 1.0.1177', vcActive: false })
+    await job
+    expect(useStore.getState().connection).toBe('connected')
+    expect(useStore.getState().attached).toBe(true)
+  })
+
+  it('より新しい切替に追い越された attach の結果は、VC 在席でも反映しない', async () => {
+    const { useStore, pending } = await setup({ ok: true, pid: 1, label: 'canary 1.0.1177', vcActive: false })
+    const older = useStore.getState().connect('canary')
+    await flush()
+    const newer = useStore.getState().connect('canary')
+    await flush()
+    expect(pending).toHaveLength(2)
+    pending[0]!({ ok: true, pid: 1, label: 'old', vcActive: true })
+    await older
+    expect(useStore.getState().connection).toBe('switching')
+    pending[1]!({ ok: true, pid: 2, label: 'new', vcActive: false })
+    await newer
+    expect(useStore.getState().connection).toBe('waiting')
+    expect(useStore.getState().connectionDetail).toBe('new  PID 2')
+  })
+
+  it('注入先の PID が分からなければ、接続の詳細に PID を出さない', async () => {
+    const { useStore } = await setup({ ok: true, pid: null, label: 'canary 1.0.1177', vcActive: false })
+    expect(useStore.getState().connectionDetail).toBe('canary 1.0.1177')
   })
 })

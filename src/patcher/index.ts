@@ -17,6 +17,7 @@ import { registerPreload } from './preloadReg.js'
 import { createSoundboardCache, resolveReadableSoundPath } from './soundboardCache.js'
 import { scanFolder, type SoundsFs } from './soundsFs.js'
 import { runSubsystems, summarize, type Subsystem, type SubsystemLog } from './subsystems.js'
+import { nextVcActive, vcActiveForState } from './vcStatus.js'
 
 /**
  * Discord の main プロセスで動く VoiceCord の入口。shim から require される。
@@ -62,7 +63,8 @@ function main(): void {
     discordBuild: install ? guessBranch(install.resourcesDir) : 'unknown',
     discordVersion: install?.version ?? 'unknown',
     lastError: null,
-    degraded: []
+    degraded: [],
+    vcActive: false
   }
   const broadcastStatus = (): void => subscribers.broadcast({ ev: 'status', status })
 
@@ -122,9 +124,14 @@ function main(): void {
               stdio: 'pipe',
               serviceName: 'VoiceCord engine'
             }) as unknown as EngineProcessLike,
-          emit: (e) => subscribers.broadcast(e),
+          emit: (e) => {
+            // vc は変化したときしか来ない。UI を再読み込みしても在席を返せるよう覚えておく
+            status.vcActive = nextVcActive(status.vcActive, e)
+            subscribers.broadcast(e)
+          },
           onState: (state, attachedPid, error, rate) => {
             status.engine = state
+            status.vcActive = vcActiveForState(state, status.vcActive)
             status.attachedPid = attachedPid
             // 注入レートは Discord 側の都合で変わる。決め打ちにせず実測値を運ぶ
             status.sampleRate = rate.sampleRate

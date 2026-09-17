@@ -188,7 +188,8 @@ export function createApi(
       return {
         ok: s.engine !== 'failed',
         pid: s.attachedPid,
-        label: `${s.discordBuild} ${s.discordVersion}`
+        label: `${s.discordBuild} ${s.discordVersion}`,
+        vcActive: s.engine === 'attached' && s.vcActive === true
       }
     },
     detach: () => call<void>(CH.detach),

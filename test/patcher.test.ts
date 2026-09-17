@@ -215,7 +215,8 @@ const STATUS: VoiceCordStatus = {
   discordBuild: 'canary',
   discordVersion: '1.0.1099',
   lastError: null,
-  degraded: []
+  degraded: [],
+  vcActive: false
 }
 
 /** registerIpc の依存。既定は「全部成功する」。個別のテストで差し替える */
@@ -470,5 +471,37 @@ describe('locateInstall / guessBranch', () => {
     expect(guessBranch(at('DiscordPTB'))).toBe('ptb')
     expect(guessBranch(at('DiscordCanary'))).toBe('canary')
     expect(guessBranch(at('DiscordDevelopment'))).toBe('development')
+  })
+})
+
+describe('VC 在席の記録（status.vcActive）', () => {
+  it('engine の vc イベントの active をそのまま記録する', async () => {
+    const { nextVcActive } = await import('../src/patcher/vcStatus.js')
+    expect(nextVcActive(false, { ev: 'engine', payload: { ev: 'vc', active: true } })).toBe(true)
+    expect(nextVcActive(true, { ev: 'engine', payload: { ev: 'vc', active: false } })).toBe(false)
+    // active が無い・真偽値でない形は false に倒す
+    expect(nextVcActive(true, { ev: 'engine', payload: { ev: 'vc' } })).toBe(false)
+  })
+
+  it('detached / engineLost で false に戻す（通知が二度と来ないため）', async () => {
+    const { nextVcActive } = await import('../src/patcher/vcStatus.js')
+    expect(nextVcActive(true, { ev: 'engine', payload: { ev: 'detached', reason: 'process-terminated' } })).toBe(false)
+    expect(nextVcActive(true, { ev: 'engine', payload: { ev: 'engineLost', code: 9 } })).toBe(false)
+  })
+
+  it('ほかのイベントでは変えない', async () => {
+    const { nextVcActive } = await import('../src/patcher/vcStatus.js')
+    expect(nextVcActive(true, { ev: 'engine', payload: { ev: 'gate', open: true } })).toBe(true)
+    expect(nextVcActive(true, { ev: 'log', level: 'info', message: 'x' })).toBe(true)
+    expect(nextVcActive(false, { ev: 'status', status: STATUS })).toBe(false)
+  })
+
+  it('エンジンが attached でなくなったら false、attached のままなら保つ', async () => {
+    const { vcActiveForState } = await import('../src/patcher/vcStatus.js')
+    expect(vcActiveForState('attached', true)).toBe(true)
+    expect(vcActiveForState('attached', false)).toBe(false)
+    expect(vcActiveForState('searching', true)).toBe(false)
+    expect(vcActiveForState('starting', true)).toBe(false)
+    expect(vcActiveForState('failed', true)).toBe(false)
   })
 })

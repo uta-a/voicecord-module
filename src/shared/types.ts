@@ -25,6 +25,9 @@ export interface AttachResult {
   ok: boolean
   pid: number | null
   label: string
+  // attach した時点で VC に在席しているか(hook.js の vc の最後の値)。vc は変化したときしか
+  // 来ないので、UI の再読み込み後や attach を待つ間に届いた分はこれで拾う。
+  vcActive: boolean
 }
 
 // 再生は常に単発・「声に重ねる」(hook.js の mode="add")。replace は自分の声を消してしまい、
