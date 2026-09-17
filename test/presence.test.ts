@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { ANCHOR_MISSING_GRACE_MS, decideFab, readVcSignal, type PresenceInput } from '../src/preload/presence.js'
+import {
+  ANCHOR_MISSING_GRACE_MS,
+  decideFab,
+  LOW_TIER_WARN_AFTER_MS,
+  readVcSignal,
+  shouldWarnLowTier,
+  type LowTierInput,
+  type PresenceInput
+} from '../src/preload/presence.js'
 
 /**
  * FAB を出すかの判定。
@@ -63,5 +71,44 @@ describe('readVcSignal', () => {
     expect(readVcSignal({ ev: 'vc', active: 'yes' })).toBeNull()
     expect(readVcSignal(null)).toBeNull()
     expect(readVcSignal('vc')).toBeNull()
+  })
+})
+
+describe('shouldWarnLowTier', () => {
+  const low: LowTierInput = {
+    tier: 3,
+    since: 0,
+    now: LOW_TIER_WARN_AFTER_MS,
+    refreshed: true,
+    classesKnown: true,
+    panelInDom: true
+  }
+
+  it('音声パネルがあるのに予備の方法でしか見つからない状態が続いたら警告する', () => {
+    expect(shouldWarnLowTier(low)).toBe(true)
+    expect(shouldWarnLowTier({ ...low, tier: 4 })).toBe(true)
+  })
+
+  it('接続中の一瞬（通話画面のボタンが先に出る）では警告しない', () => {
+    expect(shouldWarnLowTier({ ...low, now: 300 })).toBe(false)
+    expect(shouldWarnLowTier({ ...low, now: LOW_TIER_WARN_AFTER_MS - 1 })).toBe(false)
+  })
+
+  it('tier 1/2 や未検出では警告しない', () => {
+    expect(shouldWarnLowTier({ ...low, tier: 2 })).toBe(false)
+    expect(shouldWarnLowTier({ ...low, tier: null })).toBe(false)
+    expect(shouldWarnLowTier({ ...low, since: null })).toBe(false)
+  })
+
+  it('採取結果を引き直す前は警告しない', () => {
+    expect(shouldWarnLowTier({ ...low, refreshed: false })).toBe(false)
+  })
+
+  it('クラス名は取れていて音声パネル自体が画面に無い（通話画面だけ）なら警告しない', () => {
+    expect(shouldWarnLowTier({ ...low, panelInDom: false })).toBe(false)
+  })
+
+  it('クラス名が取れていなければ、音声パネルが見当たらなくても警告する', () => {
+    expect(shouldWarnLowTier({ ...low, classesKnown: false, panelInDom: false })).toBe(true)
   })
 })

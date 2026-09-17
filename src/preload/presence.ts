@@ -71,3 +71,35 @@ export const FAB_REASON_TEXT: Record<FabReason, string> = {
   'anchor-missing':
     'VC 中ですが Discord のサウンドボードボタンが見つかりません。画面の端のボタンから開けます（Discord の更新で画面構成が変わった可能性があります）'
 }
+
+/** 予備の方法（tier 3/4）での検出が、この時間続いてから警告する */
+export const LOW_TIER_WARN_AFTER_MS = 5000
+
+export interface LowTierInput {
+  tier: 1 | 2 | 3 | 4 | null
+  /** tier 3/4 になった時刻。tier 1/2 に戻るたびに null */
+  since: number | null
+  now: number
+  /** tier 3/4 になってから、採取結果を新しく受け取ったか */
+  refreshed: boolean
+  /** 採取役が音声パネルのクラス名を返しているか */
+  classesKnown: boolean
+  /** 音声パネルのボタン列（採取したクラス名か actionButtons_ 接頭辞）が画面にあるか */
+  panelInDom: boolean
+}
+
+/**
+ * 「予備の方法で見つけています」を警告するか。
+ *
+ * VC への接続や再読み込みの途中は、通話画面のボタンが音声パネルより先に描画され、
+ * 一瞬だけ文言一致（tier 3）で見つかる（Canary 1.0.1177 で約 0.3 秒）。これは Discord の更新ではないので、
+ * 一定時間続いたときだけ警告する。また、クラス名は取れているのに音声パネル自体が画面に無い
+ * （通話画面だけが出ている）ときも、クラス名の変化ではないので警告しない。
+ */
+export function shouldWarnLowTier(i: LowTierInput): boolean {
+  if (i.tier === null || i.tier <= 2 || i.since === null) return false
+  if (i.now - i.since < LOW_TIER_WARN_AFTER_MS) return false
+  if (!i.refreshed) return false
+  if (i.classesKnown && !i.panelInDom) return false
+  return true
+}

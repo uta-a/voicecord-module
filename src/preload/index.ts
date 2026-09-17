@@ -9,7 +9,7 @@ import { createHarvestClient, findSoundboardAnchor } from './anchor.js'
 import { buildGraftButton, createGraft, refreshGraftButton, type GraftState } from './graft.js'
 import { frameInfoOf, shouldMount } from './guard.js'
 import { containKeyboard, escapeAction, hasOpenLayer } from './keyboard.js'
-import { decideFab, FAB_REASON_TEXT, readVcSignal, type FabReason } from './presence.js'
+import { decideFab, FAB_REASON_TEXT, readVcSignal, shouldWarnLowTier, type FabReason } from './presence.js'
 import { createShell, SHELL_CSS, statusProblems, type Shell } from './shell.js'
 import { probeDevices, probeSync, summarizeProbe } from './probe.js'
 import { injectStyles } from './styles.js'
@@ -186,6 +186,8 @@ function main(): void {
     let graftState: GraftState = { tier: null, button: null, inserts: 0, tripped: false }
     /** 下の段で見つけた時点で受け取っていた採取結果の数。引き直し後もまだ下の段なら警告する */
     let lowTierSeenAt = -1
+    /** 下の段になった時刻。一瞬だけ下の段になる（接続中に通話画面のボタンが先に出る）ときは警告しない */
+    let lowTierSince: number | null = null
     let warnedTier = false
     const warnedFab = new Set<FabReason>()
 
@@ -222,6 +224,21 @@ function main(): void {
       return `未取得（${HARVEST_CODE_TEXT[last.code ?? 'unknown']}）`
     }
 
+    const lowTierInput = (s: GraftState, now: number): Parameters<typeof shouldWarnLowTier>[0] => {
+      const token = (harvest.classes()?.actionButtons ?? '').split(/\s+/)[0] ?? ''
+      const panelInDom =
+        document.querySelector('[class*="actionButtons_"]') !== null ||
+        (/^[A-Za-z0-9_-]+$/.test(token) && document.querySelector(`.${token}`) !== null)
+      return {
+        tier: s.tier,
+        since: lowTierSince,
+        now,
+        refreshed: lowTierSeenAt >= 0 && harvest.results() > lowTierSeenAt,
+        classesKnown: harvest.classes() !== null,
+        panelInDom
+      }
+    }
+
     const update = (): void => {
       // 引き直しの要求は非同期で投げられるので、この処理の途中で状態が書き換わることはない
       // tier 2 は actionButtons の安定したハッシュ接頭辞による検出で、通常の更新範囲。
@@ -229,8 +246,10 @@ function main(): void {
       if (graftState.tier !== null && graftState.tier > 2) {
         harvest.request()
         if (lowTierSeenAt < 0) lowTierSeenAt = harvest.results()
-      } else if (graftState.tier === 1) {
-        lowTierSeenAt = -1
+        if (lowTierSince === null) lowTierSince = Date.now()
+      } else {
+        lowTierSince = null
+        if (graftState.tier === 1) lowTierSeenAt = -1
       }
       // 状態は要求の後で読む
       const s = graftState
@@ -268,14 +287,7 @@ function main(): void {
         else ui.setAnchor(null)
       }
 
-      if (
-        ui &&
-        !warnedTier &&
-        s.tier !== null &&
-        s.tier > 2 &&
-        lowTierSeenAt >= 0 &&
-        harvest.results() > lowTierSeenAt
-      ) {
+      if (ui && !warnedTier && lowTierSince !== null && shouldWarnLowTier(lowTierInput(s, now))) {
         warnedTier = true
         ui.notify(TIER_WARNING)
       }
@@ -327,8 +339,9 @@ function main(): void {
     })
 
     // 「VC に居るのに純正ボタンが無い」の猶予切れを拾う。見つかっている間は何もしない
+    // 下の段が続いているかの確認もここで拾う（DOM が落ち着くと update が呼ばれなくなる）
     setInterval(() => {
-      if (inVc && graftState.button === null) update()
+      if ((inVc && graftState.button === null) || (lowTierSince !== null && !warnedTier)) update()
     }, 1000)
 
     // ビデオボタンを隠して横一列に並べる設定。ボタンの位置（2 段 / 横一列）と CSS の印を同時に切り替える
