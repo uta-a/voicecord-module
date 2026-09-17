@@ -1,6 +1,6 @@
 {
   "name": "voicecord-module",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "VoiceCord — Discord 内蔵クライアント mod（asar shim + patcher + preload UI + frida engine）",
   "author": "uta-a",
