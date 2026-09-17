@@ -148,3 +148,17 @@ export function installLockedSoundInterceptor(
     for (const type of KEY_EVENTS) win.removeEventListener(type, onKey, { capture: true })
   }
 }
+
+/** 純正の再生中の枠と同じ色（Canary 1.0.1177 の実測: .soundButtonInteractive.playing） */
+const PLAYING_BORDER = 'var(--status-positive-background, hsl(151.4 100% 25.1%))'
+
+/**
+ * VoiceCord で鳴らしている純正サウンドボードのサウンドに、純正の再生中と同じ緑の枠を付ける CSS。
+ * Discord の要素には触らず、サウンド ID ごとのセレクタを生成して差し替える。ID は数字だけを通す
+ */
+export function playingSoundboardCss(ids: readonly string[]): string {
+  const safe = [...new Set(ids)].filter(isSoundboardSoundId)
+  if (safe.length === 0) return ''
+  const selectors = safe.map((id) => `[role="dialog"] [class*="soundButton__"]:has(> [id="sound-${id}"])`)
+  return `${selectors.join(',')}{border-color:${PLAYING_BORDER} !important}`
+}

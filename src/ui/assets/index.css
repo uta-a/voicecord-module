@@ -42,6 +42,8 @@
     --vc-border: var(--border-subtle, rgba(151, 151, 159, 0.12));
     --vc-input: var(--border-normal, rgba(151, 151, 159, 0.2));
     --vc-ring: var(--control-primary-background-default, #5865f2);
+    /* 純正サウンドボードの再生中の枠（.soundButtonInteractive.playing、Canary 1.0.1177 の実測） */
+    --vc-playing: var(--status-positive-background, hsl(151.4 100% 25.1%));
   }
 
   /* preflight を切った代わりの、#vc-root 配下だけのリセット。
@@ -216,6 +218,9 @@
 #vc-root .vc-tile-face {
   background-color: var(--vc-muted);
   border: 1px solid transparent;
+}
+#vc-root .vc-tile-face.vc-tile-playing {
+  border-color: var(--vc-playing);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1181,3 +1181,9 @@ export const useStore = create<State>((rawSet, get) => {
   }
   }
 })
+
+/** VoiceCord で VC に流している、純正サウンドボードのサウンド ID（重複なし・順序は安定） */
+export function playingSoundboardIds(voices: readonly Voice[]): string[] {
+  const ids = voices.filter((v) => v.kind === 'vc' && v.srcId.startsWith('sb:')).map((v) => v.srcId.slice(3))
+  return [...new Set(ids)].sort()
+}

@@ -4,6 +4,7 @@ import {
   decideSoundboardUnlock,
   findLockedSound,
   installLockedSoundInterceptor,
+  playingSoundboardCss,
   setSoundboardUnlocked,
   UNLOCK_SOUNDBOARD_ATTR,
   UNLOCK_SOUNDBOARD_CSS,
@@ -237,5 +238,21 @@ describe('decideSoundboardUnlock', () => {
     // 鳴らす先が無いのに純正を止めると、押しても何も起きなくなる
     expect(decideSoundboardUnlock({ setting: true, uiMounted: false })).toEqual({ intercept: false, markHtml: false })
     expect(decideSoundboardUnlock({ setting: false, uiMounted: false })).toEqual({ intercept: false, markHtml: false })
+  })
+})
+
+describe('playingSoundboardCss', () => {
+  it('鳴らしているサウンド ID ごとに、純正の再生中と同じ緑の枠を付ける', () => {
+    const css = playingSoundboardCss(['1366072719438905447', '1366072719438905448', '1366072719438905447'])
+    expect(css).toContain('[id="sound-1366072719438905447"]')
+    expect(css).toContain('[id="sound-1366072719438905448"]')
+    expect(css.match(/sound-1366072719438905447/g)).toHaveLength(1)
+    expect(css).toContain('var(--status-positive-background')
+    expect(css.startsWith('[role="dialog"] [class*="soundButton__"]:has(> ')).toBe(true)
+  })
+
+  it('何も鳴っていなければ空、数字以外の ID はセレクタに入れない', () => {
+    expect(playingSoundboardCss([])).toBe('')
+    expect(playingSoundboardCss(['"]{}*{color:red}', 'abc'])).toBe('')
   })
 })

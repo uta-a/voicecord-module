@@ -12,11 +12,12 @@ import { containKeyboard, escapeAction, hasOpenLayer } from './keyboard.js'
 import { decideFab, FAB_REASON_TEXT, readVcSignal, shouldWarnLowTier, type FabReason } from './presence.js'
 import { createShell, SHELL_CSS, statusProblems, type Shell } from './shell.js'
 import { probeDevices, probeSync, summarizeProbe } from './probe.js'
-import { injectStyles } from './styles.js'
+import { createMutableStyle, injectStyles } from './styles.js'
 import { CAMERA_HIDE_CSS, setCameraButtonHidden } from './cameraButton.js'
 import {
   decideSoundboardUnlock,
   installLockedSoundInterceptor,
+  playingSoundboardCss,
   setSoundboardUnlocked,
   UNLOCK_SOUNDBOARD_CSS
 } from './lockedSounds.js'
@@ -360,6 +361,11 @@ function main(): void {
       if (on === unlockSoundboard) return
       unlockSoundboard = on
       setSoundboardUnlocked(document, unlockState().markHtml)
+    }
+    // VoiceCord で鳴らしている純正サウンドボードのサウンドに、純正と同じ再生中の緑の枠を付ける
+    if (ui) {
+      const playingStyle = createMutableStyle(document)
+      ui.onSoundboardPlayingChange((ids) => playingStyle.set(playingSoundboardCss(ids)))
     }
     installLockedSoundInterceptor(window, {
       enabled: () => unlockState().intercept,

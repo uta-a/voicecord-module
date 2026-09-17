@@ -41,3 +41,29 @@ export function injectStyles(doc: DocumentLike, css: string): InjectMethod {
   parent.appendChild(el)
   return 'style-element'
 }
+
+/** 後から中身を差し替えられるスタイル。再生中の表示のように、状態に合わせて書き換える CSS に使う */
+export interface MutableStyle {
+  set(css: string): void
+}
+
+export function createMutableStyle(doc: DocumentLike): MutableStyle {
+  if (typeof CSSStyleSheet !== 'undefined' && Array.isArray(doc.adoptedStyleSheets)) {
+    try {
+      const sheet = new CSSStyleSheet()
+      sheet.replaceSync('')
+      doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet]
+      return { set: (css) => sheet.replaceSync(css) }
+    } catch {
+      // replaceSync が使えない環境ではフォールバックへ
+    }
+  }
+  const el = doc.createElement('style')
+  const parent = doc.head ?? doc.documentElement
+  parent.appendChild(el)
+  return {
+    set: (css) => {
+      el.textContent = css
+    }
+  }
+}

@@ -155,6 +155,7 @@ function SoundTile({ sound }: { sound: SoundItem }): React.JSX.Element {
   const togglePreview = useStore((s) => s.togglePreview)
   const stopPreview = useStore((s) => s.stopPreview)
   const unadjusted = useStore((s) => s.settings.calibration !== null && !s.isVolumeAdjusted(sound.id))
+  const isPlaying = useStore((s) => s.voices.some((v) => v.kind === 'vc' && v.srcId === sound.id))
   const [open, setOpen] = useState(false)
   const isPreviewing = previewSrc === sound.id
   const isConnected = connection === 'connected'
@@ -168,7 +169,12 @@ function SoundTile({ sound }: { sound: SoundItem }): React.JSX.Element {
       }}
     >
       <div
-        className="vc-tile-face group relative flex h-full w-full items-center overflow-hidden rounded-lg"
+        // 純正と同じく、VC に流している間は枠を緑にする
+        className={cn(
+          'vc-tile-face group relative flex h-full w-full items-center overflow-hidden rounded-lg',
+          isPlaying && 'vc-tile-playing'
+        )}
+        data-playing={isPlaying || undefined}
       >
         <button
           type="button"

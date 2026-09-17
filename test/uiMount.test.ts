@@ -3,7 +3,7 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import App from '../src/ui/App.js'
-import { useStore } from '../src/ui/store.js'
+import { playingSoundboardIds, useStore, type Voice } from '../src/ui/store.js'
 import { usePopout } from '../src/ui/popout.js'
 import { voiceMatchDb } from '../src/ui/lib/calibration.js'
 import { createShell, type Shell } from '../src/preload/shell.js'
@@ -491,6 +491,40 @@ describe('UI のマウント', () => {
     })
     expect(usePopout.getState().open).toBe(false)
     other.remove()
+  })
+
+  it('VC に流している音源のタイルだけ、純正と同じく再生中の枠になる', async () => {
+    const st = useStore.getState()
+    const [a, b] = st.sounds
+    await act(async () => {
+      usePopout.setState({ anchor, status: null, view: 'main' })
+      usePopout.getState().setOpen(true)
+      useStore.setState({
+        voices: [
+          { voiceId: 'v90', srcId: a!.id, name: a!.id, volume: 1, kind: 'vc' },
+          { voiceId: 'preview', srcId: b!.id, name: b!.id, volume: 1, kind: 'preview' }
+        ]
+      })
+    })
+    const face = (id: string): Element | null | undefined =>
+      shell.portal.querySelector(`button[aria-label="${id}をプレイする"]`)?.parentElement
+    expect(face(a!.id)?.classList.contains('vc-tile-playing')).toBe(true)
+    // 試聴は自分にしか聞こえないので再生中の枠は付けない
+    expect(face(b!.id)?.classList.contains('vc-tile-playing')).toBe(false)
+    await act(async () => {
+      useStore.setState({ voices: [] })
+    })
+    expect(face(a!.id)?.classList.contains('vc-tile-playing')).toBe(false)
+    await act(async () => {
+      usePopout.getState().setOpen(false)
+    })
+  })
+
+  it('純正サウンドボードのサウンドで VC に流しているものの ID だけを返す', () => {
+    const v = (voiceId: string, srcId: string, kind: Voice['kind'] = 'vc'): Voice => ({ voiceId, srcId, name: srcId, volume: 1, kind })
+    expect(
+      playingSoundboardIds([v('v1', 'sb:2'), v('v2', 'sb:1'), v('v3', 'sb:2'), v('v4', '拍手'), v('preview', 'sb:3', 'preview')])
+    ).toEqual(['1', '2'])
   })
 
   it('フッターの「揃える」は全停止の左にあり、全件調整済みでも押せ、音源が無ければ押せない', async () => {

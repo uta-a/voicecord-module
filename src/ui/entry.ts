@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import type { VoiceCordStatus } from '../shared/ipc.js'
 import App from './App.js'
 import { usePopout, type AnchorInfo } from './popout.js'
-import { useStore } from './store.js'
+import { playingSoundboardIds, useStore } from './store.js'
 import UI_CSS from '../../.tmp/ui.css'
 
 /**
@@ -40,6 +40,8 @@ export interface UiController {
   playSoundboardSound: (sound: { soundId: string; name: string }) => void
   /** VoiceCord で鳴らしている音をすべて止める（純正サウンドボードの停止ボタンから） */
   stopAll: () => void
+  /** VoiceCord で鳴らしている純正サウンドボードのサウンド ID が変わったら呼ぶ（登録時にも 1 回呼ぶ） */
+  onSoundboardPlayingChange: (cb: (ids: string[]) => void) => () => void
 }
 
 /** DOM が使えるようになってから呼ぶこと */
@@ -76,6 +78,16 @@ export function mount(container: HTMLElement): UiController {
     playSoundboardSound: ({ soundId, name }) => {
       void useStore.getState().playSoundboardSound(soundId, name)
     },
-    stopAll: () => useStore.getState().stopAll()
+    stopAll: () => useStore.getState().stopAll(),
+    onSoundboardPlayingChange: (cb) => {
+      let last = playingSoundboardIds(useStore.getState().voices)
+      cb(last)
+      return useStore.subscribe((s) => {
+        const ids = playingSoundboardIds(s.voices)
+        if (ids.join(',') === last.join(',')) return
+        last = ids
+        cb(ids)
+      })
+    }
   }
 }
