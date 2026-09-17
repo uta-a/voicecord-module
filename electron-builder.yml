@@ -28,4 +28,4 @@ win:
     - target: portable
       arch: x64
 portable:
-  artifactName: VoiceCord-${version}-portable.exe
+  artifactName: VoiceCordManager-${version}.exe
