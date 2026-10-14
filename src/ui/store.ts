@@ -6,7 +6,8 @@ import type {
   CalibrationRecord,
   ConnState,
   EngineEvent,
-  SoundItem
+  SoundItem,
+  AppConfig
 } from '@shared/types'
 import { LocalAudio, listOutputDevices } from '@/lib/localAudio'
 import { fmtDb, toLinear } from '@/lib/db'
@@ -24,10 +25,8 @@ const api = engineApi
 
 // 試聴/サイドトーンのローカル出力(Web Audio)。VC には流れない。
 const localAudio = new LocalAudio()
-// fp(内容指紋) -> f32 PCM。48k/mono/f32 は 192KB/秒あるので、上限が無いと
-// フォルダを切り替えながら鳴らすたびに増え続けて解放されない(fp はファイル由来なので、
-// 音源を保存し直すだけでも旧エントリが残ったまま新エントリが積まれる)。
-// 挿入順 = 最終使用が古い順(LRU)にして、合計バイト数で頭打ちにする。
+// fp is only mtime/size, so include a normalized path in every PCM cache identity.
+const pcmKey = (path: string, fp: string): string => `${path.replace(/\\/g, '/').toLowerCase()}\0${fp}`
 const PCM_CACHE_MAX_BYTES = 64 * 1024 * 1024
 const pcmCache = new Map<string, ArrayBuffer>()
 let pcmCacheBytes = 0
@@ -38,8 +37,8 @@ let pcmCacheBytes = 0
 // 扱いになり、挿入のたびに他が全部退避されてキャッシュが実質無効化する。
 const pcmInflight = new Map<string, Promise<ArrayBuffer>>()
 
-// key は内容指紋(fp)。差し替え後は fp が変わり、古い PCM を掴まない。
-async function pcmFor(key: string, path: string): Promise<ArrayBuffer | null> {
+async function pcmFor(path: string, fp: string): Promise<ArrayBuffer | null> {
+  const key = pcmKey(path, fp)
   if (!api) return null
   const cached = pcmCache.get(key)
   if (cached) {
@@ -430,6 +429,10 @@ function pushStatus(msg: string): void {
   useStore.setState(withNotice({ status: msg }))
 }
 
+function persistConfig(partial: Partial<AppConfig>): void {
+  if (api) void api.saveConfig(partial).catch((e) => pushStatus('設定を保存できませんでした: ' + String(e)))
+}
+
 export const useStore = create<State>((rawSet, get) => {
   const set = (partial: Partial<State> | ((s: State) => Partial<State>)): void => {
     if (typeof partial === 'function') rawSet((s) => withNotice(partial(s)))
@@ -492,11 +495,11 @@ export const useStore = create<State>((rawSet, get) => {
       // 設定は await を跨いだ後の値を見る(関数先頭のスナップショットだと、待っている間に
       // OFF にされたのにモニターだけ鳴り出す)。
       if (get().settings.sidetoneEnabled) {
-        const pcm = await pcmFor(snd.fp, snd.path)
+        const pcm = await pcmFor(snd.path, snd.fp)
         // PCM 取得の遅延中に停止/拒否(voiceEnded/playRejected)されていたら鳴らさない。
         if (pcm && get().voices.some((v) => v.voiceId === vid)) {
           void localAudio
-            .play(vid, snd.fp, pcm, monitorGain(get().settings, vol), false)
+            .play(vid, pcmKey(snd.path, snd.fp), pcm, monitorGain(get().settings, vol), false)
             .catch((e) => set({ status: 'モニター再生に失敗しました: ' + String(e) }))
         }
       }
@@ -580,7 +583,7 @@ export const useStore = create<State>((rawSet, get) => {
       try {
         // ゲートを開く前に PCM 変換を済ませる。初回は ffmpeg が走って数秒かかることがあり、
         // 先に開いてしまうとその間ずっと生マイクが送信されてしまう。
-        await pcmFor(snd.fp, snd.path)
+        await pcmFor(snd.path, snd.fp)
         if (get().connection !== 'connected') return // 変換中に VC を抜けたら開かない
         // 設定は await を跨ぐたびに取り直す(待っている間にユーザーが変更しうるため、
         // 関数先頭のスナップショットを使うと古い値で鳴らしてしまう)。
@@ -891,14 +894,14 @@ export const useStore = create<State>((rawSet, get) => {
     const folder = await api.chooseFolder()
     if (!folder) return
     set({ folder })
-    void api.saveConfig({ folder })
+    persistConfig({ folder })
     const sounds = await api.scanFolder(folder)
     set({ sounds })
   },
 
   setBuild: (b) => {
     if (b === get().build) return
-    void api?.saveConfig({ build: b })
+    persistConfig({ build: b })
     void get().connect(b)
   },
   setSearch: (s) => set({ search: s }),
@@ -915,11 +918,11 @@ export const useStore = create<State>((rawSet, get) => {
   },
   setMaster: (v) => {
     get().setMasterLive(v)
-    void api?.saveConfig({ master: v })
+    persistConfig({ master: v })
   },
   patchSettings: (p) => {
     set((st) => ({ settings: { ...st.settings, ...p } }))
-    void api?.saveConfig(p)
+    persistConfig(p)
     if (p.sidetoneDevice !== undefined) {
       void localAudio.setDevice(p.sidetoneDevice).catch((e) => set({ status: String(e) }))
     }
@@ -937,7 +940,7 @@ export const useStore = create<State>((rawSet, get) => {
   },
   setSourceVolume: (srcId, v) => {
     get().setSourceVolumeLive(srcId, v)
-    void api?.saveConfig({ sourceVolumes: get().sourceVolumes })
+    persistConfig({ sourceVolumes: get().sourceVolumes })
   },
   setSourceVolumeLive: (srcId, v) =>
     set((st) => {
@@ -1000,7 +1003,7 @@ export const useStore = create<State>((rawSet, get) => {
         applied++
       }
       // setSourceVolume は 1 件ごとに config.json へ書くので、まとめて 1 回だけ保存する。
-      if (applied > 0) void api.saveConfig({ sourceVolumes: get().sourceVolumes })
+      if (applied > 0) persistConfig({ sourceVolumes: get().sourceVolumes })
       // 飛ばした理由は分けて伝える。
       const notes: string[] = []
       if (applied > 0) notes.push(`${applied} 件の音量を揃えました`)
@@ -1136,10 +1139,10 @@ export const useStore = create<State>((rawSet, get) => {
     })
     if (!api) return // モックでは行表示のみ
     void (async () => {
-      const pcm = await pcmFor(snd.fp, snd.path)
+      const pcm = await pcmFor(snd.path, snd.fp)
       if (!pcm) return
       if (get().previewSrc !== srcId) return // 待機中に停止/切替された
-      await localAudio.play('preview', snd.fp, pcm, monitorGain(get().settings, vol), false, () => {
+      await localAudio.play('preview', pcmKey(snd.path, snd.fp), pcm, monitorGain(get().settings, vol), false, () => {
         // 自然終了 → 試聴行を撤去
         const s = get()
         if (s.previewSrc === srcId) {
@@ -1257,7 +1260,7 @@ export const useStore = create<State>((rawSet, get) => {
 
   saveCalibration: (rec) => {
     set((st) => ({ settings: { ...st.settings, calibration: rec } }))
-    void api?.saveConfig({ calibration: rec })
+    persistConfig({ calibration: rec })
   }
   }
 })

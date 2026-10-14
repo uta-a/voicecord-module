@@ -2,7 +2,7 @@
 // 複数音源をミックス注入する。Python から pcm/ctrl の2チャネルで実行時制御する。
 //
 // プロトコル (Python -> JS):
-//   sc.post({type:"pcm", sourceId:"<id>"}, data=<f32le mono bytes>)   音源プリロード
+//   sc.post({type:"pcm", sourceId:"<id>", sampleRate}, data=<f32le mono bytes>) 音源プリロード
 //   sc.post({type:"ctrl", op:"play", voiceId, srcId, vol, loop, mode})
 //   sc.post({type:"ctrl", op:"stop", voiceId})
 //   sc.post({type:"ctrl", op:"stopAll"})
@@ -49,7 +49,7 @@ function num(v, dflt, max){
   return n > max ? max : n;
 }
 
-// === プリロード済み音源: srcId -> {data: Float32Array, total: サンプル数(mono)} ===
+// === プリロード済み音源: srcId -> {data, total, sampleRate: PCM 自身のレート} ===
 // native バッファ(Memory.alloc + readFloat)ではなく JS の Float32Array で持つ。
 // ミックスはサンプル毎に音源を読むため、native 境界を跨ぐと連打時に JS スレッドが飽和する。
 const sources = Object.create(null);
@@ -67,13 +67,15 @@ function log(m){ send({ev:"log", msg:m}); }
 function onPcm(msg, data){
   try {
     const id = msg.sourceId;
-    if (!id || !data){ send({ev:"error", msg:"pcm: bad payload"}); }
+    if (!id || !data || !Number.isInteger(msg.sampleRate) || msg.sampleRate < 8000 || msg.sampleRate > 192000){
+      send({ev:"error", msg:"pcm: bad payload"});
+    }
     else {
       // recv の data はコールバック後の寿命が保証されないためコピーして保持する。
       const total = (data.byteLength / 4) | 0;
       const f32 = new Float32Array(total);
       f32.set(new Float32Array(data, 0, total));
-      sources[id] = { data: f32, total: total };
+      sources[id] = { data: f32, total: total, sampleRate: msg.sampleRate };
       send({ev:"loaded", srcId:id, samples: total});
     }
   } catch(e){ send({ev:"error", msg:"onPcm: "+e}); }
@@ -380,14 +382,25 @@ function mixVoices(cnt){
       continue;
     }
     const data = s.data, total = s.total, vol = v.vol, loop = v.loop;
+    // Krisp の 1 フレームは 10ms。実際に来たフレーム長から出力レートを得る。
+    // PCM のレートと別に持つことで、未計測・デコード中・再生中の変更にも即追随する。
+    const step = s.sampleRate / (cnt * 100);
     let pos = v.pos, stopping = v.stopping;
     for (let i = 0; i < cnt; i++){
       if (pos >= total){
-        if (loop) pos = 0;
+        if (loop) pos %= total;
         else stopping = true;               // 終端 -> フェードアウトして除去
       }
-      const smp = pos < total ? data[pos] : 0.0;
-      pos++;
+      let smp = 0.0;
+      if (pos < total){
+        const index = Math.floor(pos);
+        smp = data[index];
+        if (step !== 1){
+          const next = index + 1 < total ? data[index + 1] : (loop ? data[0] : smp);
+          smp += (next - smp) * (pos - index);
+        }
+      }
+      pos += step;
       if (stopping){ fade -= FADE; if (fade < 0) fade = 0; }
       else if (fade < 1){ fade += FADE; if (fade > 1) fade = 1; }
       mixBuf[i] += smp * vol * fade;
@@ -417,6 +430,13 @@ function krispEnter(args){
 
 // 最初に発火した Krisp 形式にロックし、もう一方の注入は無視(二重注入/倍速防止)。
 let krispMode = null;   // "float" | "i16"
+let frameSamples = null;
+
+function reportRate(cnt){
+  if (frameSamples === cnt) return;
+  frameSamples = cnt;
+  send({ev:"rate", sampleRate: cnt * 100, frameSamples: cnt});
+}
 
 // 出力バッファはサンプル毎ではなく一括で読み書きする。out.add(i*4).readFloat() 等は
 // 1サンプルにつき NativePointer 生成と JS↔native の往復を伴うため、480サンプル×~100Hz で
@@ -427,6 +447,7 @@ function mixFloat(){
   else if (krispMode !== "float") return;
   const out = this.out, cnt = this.cnt;
   if (cnt <= 0 || cnt > FRAME_MAX) return;
+  reportRate(cnt);
   if (voices.length === 0){
     // 注入が無い間は読むだけで書き戻さない。声だけのレベルはここでしか測れない。
     if (calib){
@@ -457,6 +478,7 @@ function mixI16(){
   else if (krispMode !== "i16") return;
   const out = this.out, cnt = this.cnt;
   if (cnt <= 0 || cnt > FRAME_MAX) return;
+  reportRate(cnt);
   if (voices.length === 0){
     if (calib){
       const vb = out.readByteArray(cnt * 2);

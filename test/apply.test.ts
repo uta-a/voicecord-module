@@ -260,6 +260,36 @@ describe('applyPatch — 途中の状態', () => {
     fs.writeFileSync(t.backupAsar, plainAsar())
     fs.writeFileSync(t.appAsar, foreignShim(VENCORD))
 
-    expect(() => applyPatch(fs, t, plan)).toThrow(/状態が計画時/)
+    expect(() => applyPatch(fs, t, plan)).toThrow(/app.asar が計画時から変わっています/)
+  })
+  it('同じ種類の shim が別の mod 連鎖に変わっていたら拒み、触らない', () => {
+    fs.writeFileSync(t.backupAsar, plainAsar())
+    fs.writeFileSync(t.appAsar, foreignShim(VENCORD))
+    const plan = planPatch(fs, t, { voicecordPatcher: VOICECORD })
+    if (!plan.ok) throw new Error('plan failed')
+
+    const changed = buildFlatAsar({
+      'index.js': `require(${JSON.stringify(VENCORD)});require(${JSON.stringify(OTHER)})`,
+      'package.json': SHIM_PACKAGE_JSON
+    })
+    fs.writeFileSync(t.appAsar, changed)
+    const backupBefore = fs.readFileSync(t.backupAsar)
+    expect(() => applyPatch(fs, t, plan)).toThrow(/app.asar が計画時から変わっています/)
+    expect(fs.readFileSync(t.appAsar)).toEqual(changed)
+    expect(fs.readFileSync(t.backupAsar)).toEqual(backupBefore)
+  })
+
+  it('既存 backup が計画後に変わったら適用前に拒む', () => {
+    fs.writeFileSync(t.backupAsar, plainAsar())
+    fs.writeFileSync(t.appAsar, foreignShim(VENCORD))
+    const plan = planPatch(fs, t, { voicecordPatcher: VOICECORD })
+    if (!plan.ok) throw new Error('plan failed')
+
+    const changedBackup = plainAsar('changed backup')
+    fs.writeFileSync(t.backupAsar, changedBackup)
+    const appBefore = fs.readFileSync(t.appAsar)
+    expect(() => applyPatch(fs, t, plan)).toThrow(/_app.asar が計画時から変わっています/)
+    expect(fs.readFileSync(t.appAsar)).toEqual(appBefore)
+    expect(fs.readFileSync(t.backupAsar)).toEqual(changedBackup)
   })
 })

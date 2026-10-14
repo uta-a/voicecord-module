@@ -229,8 +229,8 @@ export class Injector {
   }
 
   // ---- 音源プリロード ----
-  preload(srcId: string, pcm: Buffer): void {
-    this.post({ type: 'pcm', sourceId: srcId }, pcm)
+  preload(srcId: string, sampleRate: number, pcm: Buffer): void {
+    this.post({ type: 'pcm', sourceId: srcId, sampleRate }, pcm)
   }
   unload(srcId: string): void {
     this.post({ type: 'ctrl', op: 'unload', srcId })

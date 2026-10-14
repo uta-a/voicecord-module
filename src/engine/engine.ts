@@ -34,7 +34,7 @@ function post(msg: unknown): void {
 const emit = (payload: EngineEvent): void => post({ t: 'ev', payload })
 
 let lastState: EngineState = 'starting'
-/** 直近に実測した注入レート。attach のたびに測り直す */
+/** 実際に注入する hook の 10ms フレームから届いた出力レート。 */
 let lastRate: { sampleRate: number | null; frameSamples: number | null } = {
   sampleRate: null,
   frameSamples: null
@@ -54,80 +54,6 @@ const gate = new FridaGate(inj, {
 let core: EngineCore | null = null
 let supervisor: Supervisor | null = null
 
-/**
- * レートの追随。
- *
- * 2 つの理由で「一度測って終わり」にできない。
- *
- *   1. krisp がロードされた瞬間に検査すると、まだ 1 フレームも処理しておらず
- *      0 回で返る。その場合レートが永久に不明のままになり、48000 で鳴らして
- *      「遅くて低い」になる（実機で踏んだ）
- *   2. **接続中にレートが変わる。** 音声品質（Nitro / チャンネルのビットレート）で
- *      フレーム長が 320 と 480 の間で動く。変わった瞬間にピッチと速度がズレるが、
- *      音でしか分からないので気付きにくい（実機で踏んだ）
- *
- * したがって、取れるまで短い間隔で測り直し、取れた後も定期的に見張る。
- */
-const RATE_RETRY_MS = 2_000
-const RATE_RETRY_MAX = 15
-/** 取れた後の見張り間隔。品質変更に追随するため */
-const RATE_RECHECK_MS = 30_000
-let rateRetry: NodeJS.Timeout | null = null
-
-function cancelRateRetry(): void {
-  if (rateRetry === null) return
-  clearTimeout(rateRetry)
-  rateRetry = null
-}
-
-/**
- * レートを測り直す予約。
- * left は「まだ一度も取れていない」ときの残り試行回数。取れた後は見張りに移る。
- */
-function scheduleRateRetry(pid: number, left: number): void {
-  cancelRateRetry()
-  const known = lastRate.sampleRate !== null
-  if (!known && left <= 0) {
-    emit({
-      ev: 'log',
-      level: 'warn',
-      msg: '注入レートを測れませんでした。48000Hz として扱います。音が遅い / 低い場合は再アタッチしてください'
-    })
-    return
-  }
-  rateRetry = setTimeout(
-    () => {
-      rateRetry = null
-      void probePid(pid).then(
-        (p) => {
-          // 測っている間に別の相手へ移っていたら捨てる
-          if (supervisor?.attachedPid() !== pid) return
-          if (p.sampleRate === null) {
-            // 鳴っていないだけかもしれない。既知の値は保ったまま次を待つ
-            scheduleRateRetry(pid, known ? RATE_RETRY_MAX : left - 1)
-            return
-          }
-          if (p.sampleRate !== lastRate.sampleRate) {
-            const before = lastRate.sampleRate
-            lastRate = { sampleRate: p.sampleRate, frameSamples: p.frameSamples }
-            setState('attached', pid, null)
-            emit({
-              ev: 'log',
-              level: 'info',
-              msg:
-                before === null
-                  ? `注入レートを測りました: ${p.sampleRate} Hz（${p.frameSamples} サンプル/フレーム）`
-                  : `注入レートが変わりました: ${before} Hz → ${p.sampleRate} Hz（音声品質の変更）`
-            })
-          }
-          scheduleRateRetry(pid, RATE_RETRY_MAX)
-        },
-        () => scheduleRateRetry(pid, known ? RATE_RETRY_MAX : left - 1)
-      )
-    },
-    known ? RATE_RECHECK_MS : RATE_RETRY_MS
-  )
-}
 
 /**
  * 要求の処理。ここに無いチャンネルは patcher 側の担当なので、
@@ -140,9 +66,9 @@ function need(): EngineCore {
   return core
 }
 
-/** preload が送ってくる注入レート。音源キーの一部なので正の整数に限る */
+/** PCM 自身のレート。hook と Web Audio が扱える範囲だけ受け付ける。 */
 function isInjectRate(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v > 0
+  return typeof v === 'number' && Number.isInteger(v) && v >= 8000 && v <= 192000
 }
 
 const handlers: Record<string, Handler> = {
@@ -251,16 +177,26 @@ async function main(): Promise<void> {
   }
 
   core = createEngineCore({ inj, gate, emit })
-  inj.onEvent = (p) => core?.onHookEvent(p)
+  inj.onEvent = (p) => {
+    if (p.ev === 'rate') {
+      if (isInjectRate(p.sampleRate) && typeof p.frameSamples === 'number' &&
+          p.sampleRate === p.frameSamples * 100) {
+        lastRate = { sampleRate: p.sampleRate, frameSamples: p.frameSamples }
+        const pid = supervisor?.attachedPid()
+        if (pid !== undefined && pid !== null) setState('attached', pid, null)
+      }
+      return
+    }
+    core?.onHookEvent(p)
+  }
 
   supervisor = createSupervisor({
     listProcesses,
     probe: probePid,
-    attach: async (pid, probe) => {
+    attach: async (pid) => {
+      lastRate = { sampleRate: null, frameSamples: null }
       await inj.attach(pid, HOOK_PATH)
       core?.resetSession()
-      // 状態より先に入れる。setState が読むので順序が要る
-      lastRate = { sampleRate: probe.sampleRate, frameSamples: probe.frameSamples }
       return true
     },
     // 列挙結果には必ず自分自身が混ざる。除外しないと自分に噛みに行く
@@ -271,14 +207,11 @@ async function main(): Promise<void> {
     clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
     now: () => Date.now(),
     onLog: (level, message) => emit({ ev: 'log', level, msg: message }),
-    onAttached: (pid, probe) => {
-      lastRate = { sampleRate: probe.sampleRate, frameSamples: probe.frameSamples }
+    onAttached: (pid) => {
       setState('attached', pid, null)
-      // 取れていなければ測り直し、取れていても見張りに入る（品質変更への追随）
-      scheduleRateRetry(pid, RATE_RETRY_MAX)
     },
     onLost: () => {
-      cancelRateRetry()
+      // 切断時に実フレームの記録を捨てる。新しい hook が次のフレームで通知する。
       setState('searching', null, null)
     }
   })

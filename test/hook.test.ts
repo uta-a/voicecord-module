@@ -10,6 +10,12 @@ import { fileURLToPath } from 'url'
 import { createContext, runInContext } from 'vm'
 import { describe, expect, it } from 'vitest'
 import { gatedRms } from '../src/shared/loudness.js'
+import { createApi } from '../src/preload/api.js'
+import { CH, type VoiceCordStatus } from '../src/shared/ipc.js'
+import { createEngineCore } from '../src/engine/core.js'
+import { FridaGate } from '../src/engine/transmit.js'
+import type { Injector } from '../src/engine/injector.js'
+import type { InjectPlayReq } from '../src/shared/types.js'
 
 const HOOK_SRC = readFileSync(fileURLToPath(new URL('../src/agent/hook.js', import.meta.url)), 'utf-8')
 
@@ -25,9 +31,9 @@ interface Harness {
   /** hook.js の recv("ctrl") へ制御メッセージを流す。 */
   ctrl: (msg: Record<string, unknown>) => void
   /** Krisp の 1 フレーム分(float 版)を流す。samples は [-1,1]。 */
-  frame: (samples: Float32Array) => void
+  frame: (samples: Float32Array) => Float32Array
   /** 音源をプリロードする(recv("pcm") 経路)。 */
-  pcm: (srcId: string, samples: Float32Array) => void
+  pcm: (srcId: string, samples: Float32Array, sampleRate?: number) => void
   /** VC 在席監視の 400ms タイマーを 1 回進める。 */
   tick: () => void
   /** Connection::GetStats を 1 回発火させる(VC 通話中は ~1Hz で呼ばれる)。 */
@@ -43,14 +49,14 @@ interface Harness {
 // frida のグローバルのうち hook.js が実際に触るものだけを用意する。
 // discord_voice.node(送信ゲート)は export を空で返すので、hook.js は error を 1 本出して
 // ゲートの設置を諦める — 計測の経路には影響しない。
-function loadHook(): Harness {
+function loadHook(format: 'float' | 'i16' = 'float'): Harness {
   const messages: HookMessage[] = []
   const recvHandlers: Record<string, ((msg: unknown, data?: unknown) => void) | undefined> = {}
   let krispOnEnter: ((args: unknown[]) => void) | null = null
   let krispOnLeave: (() => void) | null = null
   let watchdog: (() => void) | null = null
 
-  const FLOAT_EXPORT = { kind: 'KrispNCProcessFloat' }
+  const AUDIO_EXPORT = { kind: format === 'float' ? 'KrispNCProcessFloat' : 'KrispNCProcess' }
   // 送信ゲート側(discord_voice.node)。export 名は hook.js が前方一致で探す実物に合わせる。
   const GETSTATS_ADDR = { kind: 'GetStats' }
   const SETPTT_ADDR = { kind: 'SetPTTActive' }
@@ -78,8 +84,8 @@ function loadHook(): Harness {
         if (name === 'discord_krisp.node') {
           return {
             getExportByName: (n: string) => {
-              if (n === 'KrispNCProcessFloat') return FLOAT_EXPORT
-              throw new Error('not found') // Stable 用の int16 版は無いビルドを模す
+              if (n === AUDIO_EXPORT.kind) return AUDIO_EXPORT
+              throw new Error('not found')
             }
           }
         }
@@ -106,7 +112,7 @@ function loadHook(): Harness {
         target: unknown,
         cbs: { onEnter?: (args: unknown[]) => void; onLeave?: () => void }
       ) => {
-        if (target === FLOAT_EXPORT) {
+        if (target === AUDIO_EXPORT) {
           krispOnEnter = cbs.onEnter ?? null
           krispOnLeave = cbs.onLeave ?? null
         } else if (target === GETSTATS_ADDR) {
@@ -143,19 +149,21 @@ function loadHook(): Harness {
     frame: (samples) => {
       if (!krispOnEnter || !krispOnLeave) throw new Error('Krisp フックが設置されていない')
       // KrispNCProcess[Float](session, in, cnt, out, outCap)。out は読み書きできる箱。
-      const bytes = new Uint8Array(samples.buffer.slice(0)).buffer
+      const raw = format === 'float' ? samples : Int16Array.from(samples, (v) => Math.round(v * 32767))
+      const bytes = raw.buffer.slice(0)
       const out = {
         readByteArray: (n: number) => bytes.slice(0, n),
-        writeByteArray: () => undefined
+        writeByteArray: (buffer: ArrayBuffer) => new Uint8Array(bytes).set(new Uint8Array(buffer))
       }
       const self: Record<string, unknown> = {}
       krispOnEnter.call(self, [null, null, { toInt32: () => samples.length }, out])
       krispOnLeave.call(self)
+      return format === 'float' ? new Float32Array(bytes) : Float32Array.from(new Int16Array(bytes), (v) => v / 32767)
     },
-    pcm: (srcId, samples) => {
+    pcm: (srcId, samples, sampleRate = 48000) => {
       const h = recvHandlers['pcm']
       if (!h) throw new Error('pcm ハンドラが登録されていない')
-      h({ sourceId: srcId }, samples.buffer.slice(0))
+      h({ sourceId: srcId, sampleRate }, samples.buffer.slice(0))
     },
     tick: () => {
       if (!watchdog) throw new Error('VC 監視タイマーが登録されていない')
@@ -176,6 +184,112 @@ function loadHook(): Harness {
 const FRAME = 480
 const flat = (amp: number): Float32Array => new Float32Array(FRAME).fill(amp)
 const dbfs = (lin: number): number => 20 * Math.log10(lin)
+
+const tone = (rate: number, hz = 440): Float32Array =>
+  Float32Array.from({ length: rate }, (_, i) => 0.3 * Math.sin(2 * Math.PI * hz * i / rate))
+
+function frequency(samples: number[], rate: number): number {
+  const crossings: number[] = []
+  for (let i = 1; i < samples.length; i++) {
+    if (samples[i - 1]! <= 0 && samples[i]! > 0) crossings.push(i)
+  }
+  return (crossings.length - 1) * rate / (crossings.at(-1)! - crossings[0]!)
+}
+
+function player(h: Harness, initialRate: number | null = null) {
+  let status = { sampleRate: initialRate, frameSamples: initialRate === null ? null : initialRate / 100 } as VoiceCordStatus
+  let listener: (event: unknown, payload: unknown) => void = () => {}
+  let decoded: () => void = () => {}
+  let release: () => void = () => {}
+  const started = new Promise<void>((resolve) => { decoded = resolve })
+  const blocked = new Promise<void>((resolve) => { release = resolve })
+  const inj = {
+    attached: true,
+    preload: (key: string, rate: number, pcm: Buffer) => h.pcm(key, new Float32Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 4), rate),
+    play: (key: string, vol: number) => {
+      h.ctrl({ op: 'play', voiceId: 'tone', srcId: key, vol })
+      return 'tone'
+    }
+  } as unknown as Injector
+  const core = createEngineCore({ inj, gate: new FridaGate({ gateOpen: () => {}, gateClose: () => {}, gateReset: () => {} }), emit: () => {} })
+  const api = createApi({
+    invoke: async (channel, ...args) => {
+      if (channel === CH.getStatus) return status
+      if (channel === CH.readSoundFile) return tone(48000).buffer
+      if (channel === CH.preloadPcm) return core.preloadPcm(args[0] as string, args[1] as string, args[2] as number, Buffer.from(args[3] as ArrayBuffer))
+      if (channel === CH.play) return core.play(args[0] as InjectPlayReq)
+    },
+    on: (_channel, cb) => { listener = cb },
+    removeListener: () => {}
+  }, (rate) => async () => {
+    decoded()
+    await blocked
+    return [tone(rate)]
+  })
+  return {
+    api, started, release,
+    setRate: (rate: number) => {
+      status = { ...status, sampleRate: rate, frameSamples: rate / 100 }
+      listener(null, { ev: 'status', status })
+    }
+  }
+}
+
+describe('PCM と実フレームのレートが異なる再生', () => {
+  it.each(['float', 'i16'] as const)('未計測でも %s の 32kHz 出力で 1 秒・440Hz を保つ', async (format) => {
+    const h = loadHook(format)
+    const p = player(h)
+    p.release()
+    await p.api.play({ srcId: 's', path: 'tone.wav', fp: 'same', vol: 1 })
+    const output: number[] = []
+    for (let i = 0; i < 100; i++) output.push(...h.frame(new Float32Array(320)))
+    expect(frequency(output.slice(3200, 28800), 32000)).toBeCloseTo(440, 0)
+    expect(h.last('voiceEnded')).toBeUndefined()
+    for (let i = 0; i < 3; i++) h.frame(new Float32Array(320))
+    expect(h.last('voiceEnded')?.voiceId).toBe('tone')
+  })
+
+  it('デコード中に 48kHz から 32kHz へ変わっても古い PCM を低速にしない', async () => {
+    const h = loadHook()
+    const p = player(h, 48000)
+    const job = p.api.play({ srcId: 's', path: 'tone.wav', fp: 'same', vol: 1 })
+    await p.started
+    p.setRate(32000)
+    p.release()
+    await job
+    const output: number[] = []
+    for (let i = 0; i < 100; i++) output.push(...h.frame(new Float32Array(320)))
+    expect(frequency(output.slice(3200, 28800), 32000)).toBeCloseTo(440, 0)
+    for (let i = 0; i < 3; i++) h.frame(new Float32Array(320))
+    expect(h.last('voiceEnded')?.voiceId).toBe('tone')
+  })
+
+  it.each([[32000, 48000], [48000, 32000]])('再生中の %i → %i Hz 変更でも速度・ピッチ・再生位置を保つ', async (before, after) => {
+    const h = loadHook()
+    const p = player(h, before)
+    p.release()
+    await p.api.play({ srcId: 's', path: 'tone.wav', fp: 'same', vol: 1 })
+    const first: number[] = [], second: number[] = []
+    for (let i = 0; i < 50; i++) first.push(...h.frame(new Float32Array(before / 100)))
+    for (let i = 0; i < 50; i++) second.push(...h.frame(new Float32Array(after / 100)))
+    expect(frequency(first.slice(before / 10), before)).toBeCloseTo(440, 0)
+    expect(frequency(second, after)).toBeCloseTo(440, 0)
+    expect(h.last('voiceEnded')).toBeUndefined()
+    for (let i = 0; i < 3; i++) h.frame(new Float32Array(after / 100))
+    expect(h.last('voiceEnded')?.voiceId).toBe('tone')
+  })
+
+  it('48kHz の生 f32 音源も 32kHz の出力で 1 秒・440Hz を保つ', async () => {
+    const h = loadHook()
+    const p = player(h, 32000)
+    await p.api.play({ srcId: 's', path: 'tone.f32', fp: 'same', vol: 1 })
+    const output: number[] = []
+    for (let i = 0; i < 100; i++) output.push(...h.frame(new Float32Array(320)))
+    expect(frequency(output.slice(3200, 28800), 32000)).toBeCloseTo(440, 0)
+    for (let i = 0; i < 3; i++) h.frame(new Float32Array(320))
+    expect(h.last('voiceEnded')?.voiceId).toBe('tone')
+  })
+})
 
 describe('hook.js の声の計測', () => {
   it('フック設置に成功して ready を出す', () => {

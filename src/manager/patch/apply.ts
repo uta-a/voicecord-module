@@ -53,6 +53,8 @@ export interface PatchPlanOk {
   /** _app.asar を新しく作る必要があるか */
   needsBackup: boolean
   current: AppAsarKind
+  appSha256: string
+  backupSha256: string | null
 }
 
 export interface PatchPlanNg {
@@ -80,7 +82,20 @@ export interface PlanOptions {
  * インストールに勝手に注入するのは筋が悪いため。
  */
 export function planPatch(fs: PatchFs, t: PatchTarget, opts: PlanOptions): PatchPlan {
-  const current = classifyAppAsar(fs, t.appAsar)
+  let appSha256 = ''
+  let backupSha256: string | null = null
+  // 分類したバイト列そのものを記録する。分類後に読み直すと、その間の変更を見逃す。
+  const snapshotFs: FsLike = {
+    existsSync: (p) => fs.existsSync(p),
+    statSync: (p) => fs.statSync(p),
+    readFileSync: ((p: string, enc?: 'utf8') => {
+      const bytes = fs.readFileSync(p)
+      if (p === t.appAsar) appSha256 = sha256(bytes)
+      else if (p === t.backupAsar) backupSha256 = sha256(bytes)
+      return enc === 'utf8' ? bytes.toString('utf8') : bytes
+    }) as FsLike['readFileSync']
+  }
+  const current = classifyAppAsar(snapshotFs, t.appAsar)
 
   if (current.kind === 'missing') {
     return { ok: false, reason: `app.asar が見つかりません: ${t.appAsar}` }
@@ -92,7 +107,7 @@ export function planPatch(fs: PatchFs, t: PatchTarget, opts: PlanOptions): Patch
     }
   }
 
-  const backup = classifyAppAsar(fs, t.backupAsar)
+  const backup = classifyAppAsar(snapshotFs, t.backupAsar)
 
   if (current.kind === 'plain') {
     // 素の Discord。_app.asar があるなら、それが本体として妥当か確かめる
@@ -109,7 +124,9 @@ export function planPatch(fs: PatchFs, t: PatchTarget, opts: PlanOptions): Patch
       chain: composeChain(opts, []),
       preserved: [],
       needsBackup,
-      current
+      current,
+      appSha256,
+      backupSha256
     }
   }
 
@@ -134,7 +151,15 @@ export function planPatch(fs: PatchFs, t: PatchTarget, opts: PlanOptions): Patch
       ? current.chain.filter((p) => !samePath(p, opts.voicecordPatcher))
       : current.requires.filter((p) => !samePath(p, opts.voicecordPatcher))
 
-  return { ok: true, chain: composeChain(opts, preserved), preserved, needsBackup: false, current }
+  return {
+    ok: true,
+    chain: composeChain(opts, preserved),
+    preserved,
+    needsBackup: false,
+    current,
+    appSha256,
+    backupSha256
+  }
 }
 
 /** VoiceCord を先頭に、引き継ぎと明示追加を重複なく並べる */
@@ -166,14 +191,18 @@ export interface PatchResult {
  * （このモジュールはプロセスを見ない）。
  */
 export function applyPatch(fs: PatchFs, t: PatchTarget, plan: PatchPlanOk): PatchResult {
-  // TOCTOU 対策: 計画を立てたときから状況が変わっていないか見直す
   const now = classifyAppAsar(fs, t.appAsar)
-  if (now.kind !== plan.current.kind) {
-    throw new Error(
-      `app.asar の状態が計画時（${plan.current.kind}）から ${now.kind} に変わっています。やり直してください`
-    )
+  if (now.kind !== plan.current.kind || sha256(fs.readFileSync(t.appAsar)) !== plan.appSha256) {
+    throw new Error(`app.asar が計画時から変わっています。やり直してください`)
   }
-
+  const backupExists = fs.existsSync(t.backupAsar)
+  if (
+    (plan.backupSha256 === null && backupExists) ||
+    (plan.backupSha256 !== null &&
+      (!backupExists || sha256(fs.readFileSync(t.backupAsar)) !== plan.backupSha256))
+  ) {
+    throw new Error('_app.asar が計画時から変わっています。やり直してください')
+  }
   if (plan.needsBackup) {
     // rename ではなく copy。ここで落ちても app.asar は残る
     fs.copyFileSync(t.appAsar, t.backupAsar)

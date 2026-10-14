@@ -20,9 +20,8 @@ import type { FridaGate } from './transmit.js'
 export const PRELOAD_MAX = 48
 
 /**
- * 音源キー。指紋を混ぜるので、同名で差し替えても旧 PCM を鳴らさない。
- * 注入レートも混ぜる。未計測時の既定レートで送った PCM を、計測後も使い回すと
- * 再アタッチまでピッチと速度がずれたままになる。古いレートの分は LRU で退避される
+ * 音源キー。指紋と PCM 自身のレートを混ぜ、差し替えや別レートのデータを区別する。
+ * 出力レートは hook がフレームごとに追随するので、デコード後に変わっても速度を保つ。
  */
 export function sourceKey(srcId: string, fp: string, sampleRate: number): string {
   return `${srcId}@${fp}@${sampleRate}`
@@ -128,7 +127,7 @@ export function createEngineCore(deps: EngineCoreDeps): EngineCore {
         return { key, sent: false }
       }
       if (!inj.attached) throw new Error('audio プロセスに噛んでいません')
-      inj.preload(key, pcm)
+      inj.preload(key, sampleRate, pcm)
       preloaded.add(key)
       evict()
       return { key, sent: true }

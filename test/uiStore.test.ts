@@ -48,6 +48,87 @@ describe('UI store engine lifecycle', () => {
   })
 })
 
+describe('UI store persistence failures', () => {
+  afterEach(() => {
+    vi.doUnmock('../src/ui/mockApi.js')
+    vi.resetModules()
+  })
+
+  it('notifies on rejected config persistence without an unhandled rejection', async () => {
+    const api: Api = {
+      ...createMockApi(),
+      saveConfig: async () => {
+        throw new Error('disk full')
+      }
+    }
+    vi.doMock('../src/ui/mockApi.js', () => ({ mockApi: api }))
+    // store は import 時に API を固定するため、モック後のモジュール境界を検証する。
+    const { useStore } = await import('../src/ui/store.js')
+    await useStore.getState().init()
+
+    useStore.getState().setMaster(0.5)
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+
+    expect(useStore.getState().settings.master).toBe(0.5)
+    expect(useStore.getState().notice.msg).toContain('disk full')
+  })
+})
+
+describe('UI store preview cache identity', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.doUnmock('../src/ui/mockApi.js')
+    vi.resetModules()
+  })
+
+  it('different paths sharing a fingerprint play their own PCM, including the AudioBuffer cache', async () => {
+    const played: number[] = []
+    class AudioContextStub {
+      state = 'running'
+      destination = {}
+      createBuffer(_channels: number, length: number) {
+        const data = new Float32Array(length)
+        return { length, data, copyToChannel: (pcm: Float32Array) => data.set(pcm) }
+      }
+      createBufferSource() {
+        const source = {
+          buffer: null as { data: Float32Array } | null,
+          onended: null as (() => void) | null,
+          connect: (node: unknown) => node,
+          start: () => played.push(source.buffer!.data[0]!),
+          stop: () => {}
+        }
+        return source
+      }
+      createGain() { return { gain: { value: 0 }, connect: (node: unknown) => node } }
+      createDynamicsCompressor() {
+        return {
+          threshold: { value: 0 }, knee: { value: 0 }, ratio: { value: 0 },
+          attack: { value: 0 }, release: { value: 0 }, connect: () => {}
+        }
+      }
+    }
+    vi.stubGlobal('AudioContext', AudioContextStub)
+    const api: Api = {
+      ...createMockApi(),
+      getPcm: async (path) => new Float32Array([path.endsWith('a.wav') ? 0.125 : 0.75]).buffer
+    }
+    vi.doMock('../src/ui/mockApi.js', () => ({ mockApi: api }))
+    // store は import 時に API を固定するため、モック後のモジュール境界を検証する。
+    const { useStore } = await import('../src/ui/store.js')
+    useStore.setState({ sounds: ['a', 'b'].map((id) => ({
+      id, name: id, path: `C:/sounds/${id}.wav`, fp: 'same-mtime-size', kind: 'file'
+    })) })
+    useStore.getState().togglePreview('a')
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    useStore.getState().stopPreview()
+    useStore.getState().togglePreview('b')
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    useStore.getState().stopPreview()
+    expect(played).toEqual([0.125, 0.75])
+  })
+})
+
 describe('UI store normalizeAll', () => {
   afterEach(() => {
     vi.doUnmock('../src/ui/mockApi.js')

@@ -13,12 +13,11 @@
  * 試聴とラウドネス計測のレート。
  *
  * `lib/localAudio.ts` が 48000 で AudioBuffer を作るので、ここも 48000 で揃える。
- * **注入用のレートとは別物**。注入側は hook が実際に消費するレートに合わせる
- * （Canary 1.0.1169 では 32000 だった）。
+ * 注入では PCM 自身のレートを hook に渡し、出力フレームのレートと区別する。
  */
 export const PREVIEW_SAMPLE_RATE = 48000
 
-/** 生の f32le。デコード不要で直読みできる */
+/** 生の 48kHz / mono / f32le。レート情報が無いため、この形式に固定する。 */
 export const RAW_F32_EXT = '.f32'
 
 export function isRawF32(name: string): boolean {

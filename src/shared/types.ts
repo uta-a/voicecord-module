@@ -40,8 +40,8 @@ export interface PlayReq {
   vol: number
 }
 
-// preload → engine の再生要求。UI は注入レートを知らないので PlayReq とは分ける。
-// engine は srcId / fp / sampleRate でプリロード済み PCM を引く(レートが変わったら別の音源として送り直す)。
+// preload → engine の再生要求。sampleRate は PCM 自身のレートであり、出力レートではない。
+// engine は srcId / fp / sampleRate で PCM を区別し、hook が実フレームへ変換する。
 export interface InjectPlayReq extends PlayReq {
   sampleRate: number
 }
