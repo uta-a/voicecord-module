@@ -5,6 +5,18 @@
 
 2026-09-17: 492 テスト / 型チェック / `npm run build` 成功。Canary 実機への配置確認は未実施（CDP に Discord ページなし）。
 
+## v0.3.1 配布成果物
+
+音声・キャッシュ・設定保存・パッチ計画の修正を含む Windows x64 ポータブル版を `npm run dist:manager -- --publish never` で再生成した。旧 v0.3.0 は置き換えない。
+
+- ファイル: `dist/VoiceCordManager-0.3.1.exe`
+- SHA-256: `5484cdb149b52c6a976c86ed4c2333b905bf98b312aa6722929780b98ed37295`
+- portable exe 自体を `ELECTRON_RUN_AS_NODE=1` で起動し、内部 package の 0.3.1 と Electron 42.11.2 を確認。
+- 展開された配布物内の hook / preload / engine / UI / patcher / harvest がビルド元と SHA-256 一致。
+- 同梱 Frida のネイティブモジュールをロードし、実プロセス列挙に成功。Discord へのアタッチ・変更は行っていない。
+
+既存ユーザーは新しいマネージャーで適用して Discord を再起動する。新旧のペイロードを混在させない。GUI の適用操作と受信音の人的確認は、この配布物検証には含まない。
+
 ## 2026-10-14: 音声再生と関連不具合の修正
 
 - 未計測時のビルド別出力レート決め打ちを撤去。PCM 自身のレートを hook へ渡す。
